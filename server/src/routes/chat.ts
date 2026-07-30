@@ -1,38 +1,43 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { queryAll, execute } from '../db/index.js';
+import { queryAll, queryOne, execute } from '../db/index.js';
 import { ragflowService } from '../services/ragflow.js';
+import { requireAuth } from '../middleware/auth.js';
 import type { Message, Conversation } from '../types/index.js';
 
 const router = Router();
+
+// All chat routes require authentication
+router.use(requireAuth);
 
 // POST /api/chat/:convId - Send a message and get streaming response
 router.post('/:convId', async (req: Request, res: Response) => {
   try {
     const { convId } = req.params;
     const { content } = req.body;
+    const userId = req.user.userId;
 
     if (!content) {
       res.status(400).json({ code: 1, message: 'content is required' });
       return;
     }
 
-    // Get conversation info
-    const conv = queryAll<Conversation>(
-      'SELECT * FROM conversations WHERE id = ?',
-      [convId]
+    // Get conversation info — verify ownership
+    const conv = queryOne<Conversation>(
+      'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
+      [convId, userId]
     );
-    if (conv.length === 0) {
+    if (!conv) {
       res.status(404).json({ code: 1, message: 'Conversation not found' });
       return;
     }
-    const conversation = conv[0];
+    const conversation = conv;
     const now = new Date().toISOString();
 
     // Save user message
     const userMsgId = uuidv4();
     execute(
-      'INSERT INTO messages (id, conversation_id, role, content, references, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO messages (id, conversation_id, role, content, "references", created_at) VALUES (?, ?, ?, ?, ?, ?)',
       [userMsgId, convId, 'user', content, null, now]
     );
 
@@ -125,8 +130,7 @@ router.post('/:convId', async (req: Request, res: Response) => {
     if (fullContent) {
       const assistantMsgId = uuidv4();
       execute(
-        'INSERT INTO messages (id, conversation_id, role, content, references, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [assistantMsgId, convId, 'assistant', fullContent, null, new Date().toISOString()]
+        'INSERT INTO messages (id, conversation_id, role, content, "references", created_at) VALUES (?, ?, ?, ?, ?, ?)',
       );
     }
 

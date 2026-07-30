@@ -2,10 +2,24 @@ import type { ApiResponse, KnowledgeBase, ChatAssistant, Conversation, Message }
 
 const API_BASE = '/api';
 
+function getToken(): string | null {
+  return localStorage.getItem('ragflow_chat_token');
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+
+  const token = getToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
 
   if (!res.ok) {

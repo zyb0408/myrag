@@ -1,9 +1,21 @@
+export interface User {
+  id: string;
+  username: string;
+  password_hash: string;
+  display_name: string;
+  must_reset_password: number;
+  is_active: number;
+  is_admin: number;
+  created_at: string;
+}
+
 export interface Conversation {
   id: string;
   name: string;
   assistant_id: string;
   kb_id: string;
   kb_name: string;
+  user_id: string;
   created_at: string;
   updated_at: string;
 }

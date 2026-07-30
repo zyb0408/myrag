@@ -52,3 +52,17 @@ export interface ApiResponse<T> {
   data: T;
   message?: string;
 }
+
+// ===== User =====
+export interface UserInfo {
+  id: string;
+  username: string;
+  displayName: string;
+  isAdmin: boolean;
+  mustResetPassword: boolean;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: UserInfo;
+}

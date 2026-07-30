@@ -5,11 +5,16 @@ import { ragflowService } from './services/ragflow.js';
 import knowledgeBaseRouter from './routes/knowledgeBase.js';
 import conversationRouter from './routes/conversation.js';
 import chatRouter from './routes/chat.js';
+import authRouter from './routes/auth.js';
+import adminRouter from './routes/admin.js';
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Public routes (no auth required)
+app.use('/api/auth', authRouter);
 
 // API Routes
 app.use('/api/knowledge-bases', knowledgeBaseRouter);
@@ -25,8 +30,10 @@ app.get('/api/chat-assistants', async (_req, res) => {
   }
 });
 
+// Protected routes (auth required)
 app.use('/api/conversations', conversationRouter);
 app.use('/api/chat', chatRouter);
+app.use('/api/admin', adminRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
