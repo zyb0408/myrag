@@ -4,10 +4,10 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "cd server && npm run dev",
+    "dev:server": "cd server && uv run uvicorn app.main:app --host 0.0.0.0 --port 3001",
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
-    "install:all": "cd client && npm install && cd ../server && npm install"
+    "install:all": "cd client && npm install && cd server && uv sync"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

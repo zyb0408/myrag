@@ -1,460 +1,259 @@
-# RAGFlow 知识库问答系统
+# RAGFlow 知识问答系统（Knowledge QA）
 
-基于 [RAGFlow](https://ragflow.io) 搭建的企业内部知识库 Web 问答系统。提供一个简洁的聊天式交互界面，支持多知识库切换、多轮对话、新建/管理对话等功能。
+基于 **RAGFlow** 的知识问答平台：前端 Vue 3 + ant-design-vue，后端 **Python 3.10 (FastAPI)** BFF
+服务层，三层架构：**浏览器 → BFF 后端 → RAGFlow**。
 
-## 功能特性
+- 前端目录：`client/`（Vue 3 + Vite，dev 端口 5173，**本仓库重构未改动任何前端文件**）
+- 后端目录：`server/`（Python 3.10 + FastAPI BFF，端口 3001，本次由 TypeScript 重写而来）
+- RAGFlow 服务：默认 `http://localhost:9380`
 
-- **知识库选择** — 从 RAGFlow 已配置的 Chat Assistant 中选择要问答的知识库
-- **多轮对话** — 自动注入完整对话历史，保持上下文连贯的问答体验
-- **对话管理** — 支持新建对话、重命名、删除，对话历史本地持久化
-- **流式输出** — 基于 SSE 的打字机效果，实时渲染 AI 回复
-- **Markdown 渲染** — AI 回复中的代码块、表格、��表等自动渲染
-- **多用户隔离** — JWT 登录认证，管理员可增删用户，对话数据按用户隔离
-- **首次登录重置密码** — 新用户（或管理员重置密码后）首次登录需强制修改密码
+> 本次分支 `feature/python-bff-rewrite` 将后端从 Node.js/TypeScript（Express）整体重写为
+> Python 3.10（FastAPI），**接口契约 100% 保持不变**，前端零改动即可对接。
+> 详见 [REFACTOR.md](./REFACTOR.md) 重构文档。
 
-## 系统架构
+---
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     用户浏览器                            │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │             React SPA (Vite + TypeScript)          │  │
-│  │  ┌──────────┐  ┌──────────────────────────────┐   │  │
-│  │  │ Sidebar  │  │          Chat Area           │   │  │
-│  │  │          │  │  消息列表 (用户 ↔ AI 气泡)     │   │  │
-│  │  │ 知识库选择 │  │  流式打字机效果               │   │  │
-│  │  │ 对话列表  │  │  输入框 + 发送按钮             │   │  │
-│  │  └──────────┘  └──────────────────────────────┘   │  │
-│  └───────────────────────────────────────────────────┘  │
-└──────────────────────┬──────────────────────────────────┘
-                       │ HTTP/SSE (localhost:5173)
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│              BFF 代理层 (Express + TypeScript)            │
-│                                                         │
-│  /api/auth/login         →  用户登录 (JWT)                │
-│  /api/auth/me            →  当前用户信息                   │
-│  /api/admin/users        →  管理员用户管理                 │
-│  /api/knowledge-bases    →  知识库列表                    │
-│  /api/chat-assistants    →  Chat Assistant 列表          │
-│  /api/conversations      →  对话 CRUD (SQLite)           │
-│  /api/chat/:id           →  发送消息 (SSE 流式透传)       │
-│                                                         │
-│  SQLite: users + conversations + messages 表             │
-└──────────────────────┬──────────────────────────────────┘
-                       │ Bearer Token (localhost:9380)
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│                  RAGFlow 服务（已有）                      │
-│                                                         │
-│  GET  /api/v1/datasets         → 知识库列表              │
-│  GET  /api/v1/chats            → Chat Assistant 列表     │
-│  POST /api/v1/openai/{id}/chat/completions → 对话补全    │
-└─────────────────────────────────────────────────────────┘
-```
+## 一、项目简介
 
-### 数据流
+系统提供以下能力：
+
+1. **用户认证**：登录、重置密码、会话恢复（JWT，7 天有效期）；
+2. **权限管理**：普通用户 / 管理员两级角色，管理员可管理用户（创建、删除、重置密码）；
+3. **知识库与助手**：透传 RAGFlow 的知识库（dataset）列表与聊天助手（chat）列表；
+4. **对话管理**：本地 SQLite 持久化对话与消息（按用户隔离）；
+5. **流式问答**：通过 BFF 调用 RAGFlow 的 OpenAI 兼容接口，以 SSE 流式转发到前端。
+
+架构总览：
 
 ```
-用户输入 → React → BFF (保存到 SQLite) → RAGFlow API (SSE)
-                                               ↓
-用户看到 ← React ← BFF (SSE 透传 + 缓存全文) ←──┘
-                                               ↓
-                              流结束后 BFF 将完整回复写入 SQLite
+浏览器 (Vue 3, :5173)
+   │  /api → Vite 代理 → http://localhost:3001
+   ▼
+BFF 后端 (Python 3.10 FastAPI, :3001)
+   ├─ SQLite (server/data/ragflow-chat.db)：users / conversations / messages
+   └─ httpx → RAGFlow (http://localhost:9380)
+        /api/v1/datasets
+        /api/v1/chats
+        /api/v1/openai/{chat_id}/chat/completions (SSE)
 ```
 
-### 架构决策
+---
 
-| 决策 | 说明 |
-|------|------|
-| 引入 BFF 代理层 | API Key 不暴露到浏览器；消息历史统一持久化 |
-| SQLite 存储对话 | 零配置、嵌入式，无需额外数据库服务 |
-| SSE 透传 | BFF 直转 RAGFlow 的 SSE 流，既保证安全又不增加延迟 |
-| Vite 开发代理 | 前端 `/api` 请求自动转发到 BFF，避免跨域问题 |
-| Zustand 状态管理 | 轻量级，TypeScript 友好，比 Redux 更简洁 |
-| JWT 认证 | 无状态 token，login 签发 → 所有接口带 Authorization header |
-| bcrypt 密码哈希 | 密码不存明文，哈希存储，首次登录强制改密 |
+## 二、Python 版本要求
 
-## 技术栈
+- **Python 3.10.x（唯一受支持版本）**
+- 依赖与虚拟环境由 [uv](https://docs.astral.sh/uv/) 管理，`pyproject.toml` 中声明
+  `requires-python = ">=3.10,<3.11"`；若本机无 3.10 解释器，uv 会自动下载安装。
 
-| 层级 | 技术 | 用途 |
-|------|------|------|
-| 前端框架 | React 18 + TypeScript | UI 构建 |
-| 构建工具 | Vite 6 | 开发服务器 & 构建 |
-| UI 组件 | Ant Design 5 | 界面组件 |
-| 图标 | @ant-design/icons | 图标库 |
-| Markdown | react-markdown | AI 回复渲染 |
-| 状态管理 | Zustand 5 | 全局状态 |
-| 路由 | react-router-dom 6 | 前端路由与页面守卫 |
-| 后端框架 | Express 4 | HTTP 服务 |
-| 认证 | jsonwebtoken + bcryptjs | JWT 签发验证 + 密码哈希 |
-| 数据库 | better-sqlite3 | 对话 & 消息存储 |
-| 配置管理 | dotenv | 环境变量 |
-| 并发启动 | concurrently | 同时启动前后端 |
-
-## 项目结构
-
-```
-knowlege-new/
-├── client/                             # 前端
-│   ├── src/
-│   │   ├── main.tsx                    # 入口
-│   │   ├── App.tsx                     # Ant Design 配置 & 路由
-│   │   ├── App.css                     # 全局样式 & Markdown 样式
-│   │   ├── pages/
-│   │   │   ├── ChatPage.tsx            # 主页面 — 组装 Sidebar + ChatWindow
-│   │   │   ├── LoginPage.tsx           # 登录页面
-│   │   │   ├── ResetPasswordPage.tsx   # 首次登录重置密码
-│   │   │   └── AdminPage.tsx           # 管理员用户管理（增删用户 + 重置密码）
-│   │   ├── components/
-│   │   │   ├── layout/
-│   │   │   │   ├── MainLayout.tsx      # 左右分栏布局
-│   │   │   │   └── Sidebar.tsx         # 侧边栏容器
-│   │   │   ├── auth/
-│   │   │   │   └── ProtectedRoute.tsx   # 路由守卫（登录保护 + 管理员保护）
-│   │   │   ├── knowledge-base/
-│   │   │   │   └── KBSelector.tsx      # 知识库下拉选择器
-│   │   │   ├── conversation/
-│   │   │   │   ├── ConversationList.tsx # 对话列表
-│   │   │   │   └── ConversationItem.tsx # 单条对话（操作菜单）
-│   │   │   └── chat/
-│   │   │       ├── ChatWindow.tsx       # 聊天主窗口（组装）
-│   │   │       ├── ChatHeader.tsx       # 聊天头部（名称 & 知识库）
-│   │   │       ├── MessageList.tsx      # 消息列表 + 自动滚底
-│   │   │       ├── MessageBubble.tsx    # 消息气泡 + Markdown 渲染
-│   │   │       └── ChatInput.tsx        # 输入框组件
-│   │   ├── stores/
-│   │   │   ├── appStore.ts             # 全局状态：知识库列表、选中 Assistant
-│   │   │   ├── chatStore.ts            # 聊天状态：对话列表、消息、流式缓存
-│   │   │   └── authStore.ts            # 认证状态：token、当前用户、login/logout
-│   │   ├── services/
-│   │   │   ├── api.ts                  # REST API 封装
-│   │   │   └── sse.ts                  # SSE 流式接收处理
-│   │   └── types/
-│   │       └── index.ts                # TypeScript 类型定义
-│   ├── index.html
-│   ├── vite.config.ts                  # Vite 配置（含 /api 代理）
-│   └── package.json
-├── server/                             # 后端 BFF
-│   ├── src/
-│   │   ├── index.ts                    # Express 入口 & 路由注册
-│   │   ├── config.ts                   # 环境变量配置
-│   │   ├── routes/
-│   │   │   ├── knowledgeBase.ts        # GET /api/knowledge-bases
-│   │   │   ├── conversation.ts         # 对话 CRUD（带 user_id 隔离）
-│   │   │   ├── chat.ts                 # POST /api/chat/:convId (SSE)（带归属验证）
-│   │   │   ├── auth.ts                 # POST /api/auth/login + reset-password + GET /me
-│   │   │   └── admin.ts               # GET/POST/DELETE /api/admin/users
-│   │   ├── middleware/
-│   │   │   └── auth.ts                # JWT 验证中间件 (requireAuth / requireAdmin)
-│   │   ├── services/
-│   │   │   ├── ragflow.ts              # RAGFlow API 封装
-│   │   │   └── sse.ts                  # SSE 流处理
-│   │   ├── db/
-│   │   │   ├── index.ts               # SQLite 初始化 & 查询工具函数
-│   │   │   └── schema.ts              # 建表语句
-│   │   └── types/
-│   │       └── index.ts               # 类型定义
-│   ├── data/                           # SQLite 数据文件目录（自动创建）
-│   ├── .env                            # 环境变量
-│   └── package.json
-└── package.json                        # 根脚本（npm run dev 同时启动前后端）
-```
-
-## 环境要求
-
-- **Node.js** >= 18
-- **npm** >= 9
-- 已部署可访问的 **RAGFlow** 服务（版本 >= 0.24.0，需支持 OpenAI 兼容 API）
-- 在 RAGFlow 中已创建并配置好 **Chat Assistant**（绑定知识库、模型等）
-
-## 配置
-
-编辑 `server/.env`：
-
-```env
-# RAGFlow 服务地址
-RAGFLOW_BASE_URL=http://your-ragflow-host:9380
-
-# RAGFlow API Key（在 RAGFlow 控制台 → 设置 → API Key 中获取）
-RAGFLOW_API_KEY=ragflow-your-api-key-here
-
-# BFF 服务端口（可选，默认 3001）
-BFF_PORT=3001
-
-# JWT 签名密钥（生产环境务必修改为随机字符串）
-JWT_SECRET=ragflow-knowledge-qa-secret-change-in-production
-```
-
-> **获取 API Key**：登录 RAGFlow 控制台 → 右上角设置 → API Key → 创建新 Key，复制以 `ragflow-` 开头的 key。
-
-## 安装 & 启动
+检查 uv：
 
 ```bash
-# 1. 安装所有依赖
-npm run install:all
-
-# 2. 启动开发环境（同时启动前端 + 后端）
-npm run dev
-
-# 前端: http://localhost:5173
-# 后端: http://localhost:3001
+uv --version
+# 未安装时：curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-生产构建：
+---
+
+## 三、环境准备与依赖安装
 
 ```bash
-# 构建前端
-cd client && npm run build
+# 1. 进入后端目录
+cd server
 
-# 产物在 client/dist/，可直接部署到静态服务器
+# 2. 创建虚拟环境并安装依赖（生成 .venv 与 uv.lock，自动锁定 Python 3.10）
+uv sync
 
-# 后端启动
-cd server && npm run build && npm start
+# 3. 启动前准备环境变量
+cp .env.example .env   # 然后按需编辑（见下节）
 ```
 
-## API 接口
+> 前端依赖（仅前端开发需要）：`cd client && npm install`。
+> 根目录亦可一键执行 `npm run install:all`（等价上面两条）。
 
-所有接口以 `/api` 为前缀，BFF 层透传请求到 RAGFlow。
+---
 
-### 知识库
+## 四、配置说明（密钥、环境变量）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/knowledge-bases` | 获取知识库列表（来自 RAGFlow datasets） |
+配置文件：`server/.env`（git 忽略，不提交仓库；`server/.env.example` 为样例模板）。
 
-### Chat Assistant
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| `RAGFLOW_BASE_URL` | 是 | `http://localhost:9380` | RAGFlow 服务地址（含端口） |
+| `RAGFLOW_API_KEY` | 是 | 空 | RAGFlow API Key（RAGFlow 平台生成，Bearer 方式传递） |
+| `BFF_PORT` | 否 | `3001` | BFF 服务监听端口（前端 Vite 代理指向此端口） |
+| `JWT_SECRET` | 否 | 内置默认值 | JWT 签名密钥，**生产环境必须改为强随机值** |
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/chat-assistants` | 获取已配置的 Chat Assistant 列表 |
+安全说明：
 
-### 对话管理
+- `RAGFLOW_API_KEY` 仅存于后端，前端不接触 RAGFlow；
+- `JWT_SECRET` 泄漏将导致任意伪造登录态，生产环境务必更换；
+- 首次启动会在空库中自动创建默认管理员：`admin / admin123`（登录后建议立即改密）。
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/conversations?kb_id=xxx` | 获取指定知识库下的对话列表 |
-| `POST` | `/api/conversations` | 新建对话 |
-| `PATCH` | `/api/conversations/:id` | 重命名对话 |
-| `DELETE` | `/api/conversations/:id` | 删除对话（级联删除消息） |
-| `GET` | `/api/conversations/:id/messages` | 获取对话的消息历史 |
+---
 
-**POST /api/conversations 请求体：**
+## 五、启动与运行方式
 
-```json
-{
-  "name": "对话名称（可选，不传则自动生成）",
-  "assistant_id": "RAGFlow Chat Assistant ID",
-  "kb_id": "知识库 ID",
-  "kb_name": "知识库名称"
-}
+### 方式一：分别启动（推荐开发）
+
+```bash
+# 后端 BFF（端口 3001）
+cd server && uv run uvicorn app.main:app --host 0.0.0.0 --port 3001
+
+# 前端（端口 5173，另开终端）
+cd client && npm run dev
 ```
 
-### 聊天
+### 方式二：根目录一键启动
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/chat/:convId` | 发送消息，返回 SSE 流式响应 |
-
-**POST /api/chat/:convId 请求体：**
-
-```json
-{
-  "content": "用户问题"
-}
+```bash
+npm run dev        # 并发启动前后端（dev:server 用 uv，dev:client 用 Vite）
 ```
 
-**SSE 响应格式：**
+### 健康检查与接口文档
 
-```
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"您好"}}],"model":"model","object":"chat.completion.chunk"}
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"，请问"}}],"model":"model","object":"chat.completion.chunk"}
-data: [DONE]
+```bash
+curl http://localhost:3001/api/health     # → {"status":"ok"}
 ```
 
-### 认证接口
+- Swagger 文档：<http://localhost:3001/docs>
+- OpenAPI JSON：<http://localhost:3001/openapi.json>
 
-| 方法 | 路径 | 说明 | 认证 |
-|------|------|------|------|
-| `POST` | `/api/auth/login` | 用户登录，返回 JWT Token | 否 |
-| `POST` | `/api/auth/reset-password` | 修改密码（需原密码） | 是 |
-| `GET` | `/api/auth/me` | 获取当前用户信息 | 是 |
+> 运行前提：RAGFlow 服务已启动且 `RAGFLOW_API_KEY` 有效；
+> 知识库/助手列表与流式问答依赖 RAGFlow 可用。
 
-**POST /api/auth/login 请求体：**
+---
 
-```json
-{
-  "username": "admin",
-  "password": "admin123"
-}
-```
+## 六、接口文档
 
-**POST /api/auth/login 响应：**
+统一响应包装：
 
-```json
-{
-  "code": 0,
-  "data": {
-    "token": "eyJhbGciOi...",
-    "user": {
-      "id": "xxx",
-      "username": "admin",
-      "displayName": "管理员",
-      "isAdmin": true,
-      "mustResetPassword": true
-    }
-  }
-}
-```
+- 成功：`{ "code": 0, "data": ... }`
+- 业务失败：`{ "code": 1, "message": "..." }`（HTTP 状态码 400/401/403/404/500 对应）
+- 认证失败：`{ "code": 401|403, "message": "..." }`
 
-**POST /api/auth/reset-password 请求体：**
+### 1. 认证 `/api/auth`（无需 JWT）
 
-```json
-{
-  "username": "admin",
-  "oldPassword": "admin123",
-  "newPassword": "new-password-here"
-}
-```
+| 方法 | 路径 | 请求体 | 响应 data |
+|---|---|---|---|
+| POST | `/api/auth/login` | `{username, password}` | `{token, user: UserInfo}` |
+| POST | `/api/auth/reset-password` | `{username, oldPassword, newPassword}` | `{success: true}` |
+| GET | `/api/auth/me` | `Authorization: Bearer <token>` | `UserInfo` |
 
-### 管理员接口
+`UserInfo = { id, username, displayName, isAdmin, mustResetPassword }`
 
-> 以下接口均需要管理员权限（JWT 中 `isAdmin` 为 true）
+### 2. 管理员 `/api/admin`（需 JWT + 管理员角色）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/admin/users` | 获取用户列表 |
-| `POST` | `/api/admin/users` | 创建新用户 |
-| `DELETE` | `/api/admin/users/:id` | 删除用户（级联删除其对话） |
-| `PATCH` | `/api/admin/users/:id/reset-password` | 管理员重置用户密码 |
+| 方法 | 路径 | 请求体 | 响应 data |
+|---|---|---|---|
+| GET | `/api/admin/users` | — | `UserInfo[]`（含 `createdAt`、`isActive`） |
+| POST | `/api/admin/users` | `{username, password, displayName}` | 新用户对象 |
+| DELETE | `/api/admin/users/:id` | — | `{success: true}` |
+| PATCH | `/api/admin/users/:id/reset-password` | `{newPassword}` | `{success: true}` |
 
-**POST /api/admin/users 请求体：**
+### 3. 知识库与助手（无需 JWT，透传 RAGFlow）
 
-```json
-{
-  "username": "zhangsan",
-  "password": "initial-password",
-  "displayName": "张三"
-}
-```
+| 方法 | 路径 | 响应 data |
+|---|---|---|
+| GET | `/api/knowledge-bases` | RAGFlow 知识库列表（`/api/v1/datasets?page=1&page_size=100`） |
+| GET | `/api/chat-assistants` | RAGFlow 聊天助手列表（`/api/v1/chats`） |
 
-### 健康检查
+### 4. 对话 `/api/conversations`（需 JWT）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/health` | 返回 `{"status":"ok"}` |
+| 方法 | 路径 | 请求体/参数 | 响应 data |
+|---|---|---|---|
+| GET | `/api/conversations` | query `kb_id?` | `Conversation[]` |
+| POST | `/api/conversations` | `{name?, assistant_id, kb_id, kb_name}` | `Conversation` |
+| PATCH | `/api/conversations/:id` | `{name}` | `Conversation` |
+| DELETE | `/api/conversations/:id` | — | `true` |
+| GET | `/api/conversations/:id/messages` | — | `Message[]` |
 
-## 数据库设计
+`Conversation = { id, name, assistant_id, kb_id, kb_name, user_id, created_at, updated_at }`
+`Message = { id, conversation_id, role, content, references, created_at }`
 
-### users 表
+### 5. 聊天 `/api/chat`（需 JWT）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT (PK) | UUID |
-| username | TEXT (UNIQUE) | 登录用户名 |
-| password_hash | TEXT | bcrypt 哈希后的密码 |
-| display_name | TEXT | 显示名称 |
-| must_reset_password | INTEGER | 是否需重置密码（0/1） |
-| is_active | INTEGER | 是否启用（0/1） |
-| is_admin | INTEGER | 是否管理员（0/1） |
-| created_at | TEXT | 创建时间 (ISO 8601) |
+| 方法 | 路径 | 请求体 | 响应 |
+|---|---|---|---|
+| POST | `/api/chat/:convId` | `{content}` | SSE 流式（见下） |
+| POST | `/api/chat/:convId/stop` | — | `{code:0, data:{stopped:true}}` |
 
-### conversations 表
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT (PK) | UUID |
-| name | TEXT | 对话名称 |
-| assistant_id | TEXT | RAGFlow Chat Assistant ID |
-| kb_id | TEXT | 知识库 ID |
-| kb_name | TEXT | 知识库名称 |
-| user_id | TEXT (FK) | 所属用户 ID，外键关联 users 表 |
-| created_at | TEXT | 创建时间 (ISO 8601) |
-| updated_at | TEXT | 更新时间 (ISO 8601) |
-
-### messages 表
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT (PK) | UUID |
-| conversation_id | TEXT (FK) | 关联对话 ID，级联删除 |
-| role | TEXT | `user` 或 `assistant` |
-| content | TEXT | 消息内容 |
-| references | TEXT (JSON) | 引用来源（预留） |
-| created_at | TEXT | 创建时间 (ISO 8601) |
-
-## 多用户认证
-
-### 认证机制
-
-系统使用 **JWT（JSON Web Token）** 进行无状态认证。登录成功后前端将 token 存储到 `localStorage`，后续所有 API 请求自动附带 `Authorization: Bearer <token>` header，BFF 层通过 `requireAuth` 中间件验证 token 并提取 `user_id`，实现数据隔离。
+SSE 事件格式（与前端 `client/src/services/sse.ts` 解析完全一致）：
 
 ```
-登录流程：
-  LoginPage → POST /api/auth/login → 服务端验证密码(bcrypt) → 返回 JWT
-  ↓
-  前端存储 token 到 localStorage
-  ↓
-首次登录（mustResetPassword = true）→ 强制跳转 ResetPasswordPage
-  ↓
-正常使用 → 所有请求带 Authorization header → BFF 中间件解析 user_id
-  ↓
-数据隔离 → 所有 SQL 查询追加 WHERE user_id = ?
+data: {"choices":[{"delta":{"content":"..."}}]}   ← RAGFlow 增量文本，逐条透传
+data: [DONE]                                       ← 流结束
+data: {"error":"..."}                              ← 出错时发送，随后 [DONE]
 ```
 
-### 默认管理员账号
+### 6. 其他
 
-系统首次启动时会自动创建**种子管理员账号**：
+| 方法 | 路径 | 响应 |
+|---|---|---|
+| GET | `/api/health` | `{status:'ok'}` |
 
-| 字段 | 值 |
-|------|-----|
-| 用户名 | `admin` |
-| 密码 | `admin123` |
-| 首次登录 | **必须修改密码** |
+---
 
-### 管理员操作
+## 七、与旧实现（TypeScript/Express）的差异说明
 
-管理员登录后，在侧边栏底部点击用户头像 → 选择「用户管理」，可以：
+本次重写（分支 `feature/python-bff-rewrite`）相对旧 Node.js 后端的差异：
 
-- **添加用户** — 输入用户名、显示名称、初始密码（新用户首次登录需改密码）
-- **重置密码** — 为用户设置新密码（该用户下次登录时需改密码）
-- **删除用户** — 删除用户及其所有对话数据
+### 技术栈
 
-### 数据隔离
+| 维度 | 旧实现 | 新实现 |
+|---|---|---|
+| 语言/运行时 | TypeScript / Node.js | **Python 3.10** |
+| Web 框架 | Express 4 | **FastAPI + uvicorn** |
+| 数据库访问 | better-sqlite3 | Python 标准库 `sqlite3`（同一 db 文件） |
+| 密码哈希 | bcryptjs | bcrypt（hash 格式互通，兼容存量数据） |
+| JWT | jsonwebtoken | PyJWT（HS256，payload 字段一致） |
+| HTTP 客户端 | 内置 fetch | httpx（异步流式） |
+| 依赖管理 | npm | **uv**（pyproject.toml + uv.lock） |
 
-每个用户的对话完全隔离，互不可见：
+### 行为差异（仅 1 处缺陷修复，接口契约不变）
 
-- `conversations` 表通过 `user_id` 关联所属用户
-- 所有对话查询、修改、删除操作均验证 `user_id = req.user.userId`
-- `messages` 表通过 `conversation_id` 级联隔离，无需额外字段
+旧版 `routes/chat.ts` 在流式对话结束保存助手消息时存在参数缺失缺陷（`better-sqlite3`
+参数不匹配），导致：
 
-## 使用说明
+1. 助手回复**永不写入数据库**（历史消息中永远只有用户消息）；
+2. 前端每次对话在收到完整回复后，还会额外收到一条 `data: {"error": ...}` 事件。
 
-1. 确保 RAGFlow 服务已启动且可访问
-2. 在 `server/.env` 中配置 RAGFlow 地址和 API Key
-3. 运行 `npm run dev` 启动系统
-4. 浏览器打开 `http://localhost:5173`
-5. 使用默认管理员账号登录（`admin` / `admin123`）或管理员创建的其他账号
-6. **首次登录需修改密码**
-7. 在左侧下拉框中选择一个知识库（Chat Assistant）
-8. 点击「新建对话」开始问答
-9. 在输入框中输入问题，按 Enter 发送
-10. 右侧对话框会实时显示 AI 回复
+新实现按原意图修复：助手回复正确持久化到 `messages` 表，不再产生错误的 error 事件。
+**接口路径、请求方法、请求参数、响应结构与字段含义全部保持不变**，前端无需任何改动；
+RAGFlow 异常时仍按契约发送 `data: {"error": ...}`。
 
-## 开发说明
+### 结构变化
 
-### 前端代理
+- 后端源码由 `server/src/**/*.ts` 变为 `server/app/**/*.py`（模块划分见 REFACTOR.md）；
+- 旧 npm 配置（`package.json`/`package-lock.json`/`tsconfig.json`）删除；
+- 根目录 `package.json` 的 `dev:server` / `install:all` 脚本改用 uv；
+- 数据库文件路径不变（`server/data/ragflow-chat.db`），存量数据零迁移直接可用；
+- 环境变量名与语义不变（`RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `BFF_PORT` / `JWT_SECRET`）。
 
-开发模式下，Vite 自动将 `/api` 请求代理到 BFF 服务（`localhost:3001`），无需额外配置。
+### 不变项（严格保持）
 
-### BFF 数据存储
+- 全部 REST 接口路径、方法、参数、响应结构（见上节接口文档）；
+- SSE 转发格式与前端 `sse.ts` 解析逻辑；
+- SQLite 表结构与 JWT/登录态语义；
+- 前端 `client/` 代码零改动。
 
-对话和消息存储在 `server/data/ragflow-chat.db`（SQLite），项目重启后数据不丢失。
+---
 
-### Node 版本管理
+## 八、目录结构
 
-项目根目录的 `package.json` 使用 `concurrently` 同时启动前后端。如果使用 nvm 或 fnm，确保 Node.js >= 18。
-
-## License
-
-MIT
+```
+├── client/                  # 前端（Vue 3，未改动）
+├── server/                  # 后端 BFF（Python 3.10）
+│   ├── pyproject.toml       # uv 项目定义（锁 Python 3.10）
+│   ├── uv.lock              # 依赖锁文件
+│   ├── .env / .env.example  # 环境配置
+│   ├── app/
+│   │   ├── main.py          # FastAPI 入口（CORS/路由/健康检查）
+│   │   ├── config.py        # 环境配置
+│   │   ├── db.py            # SQLite（建表/迁移/种子）
+│   │   ├── security.py      # JWT + bcrypt + 鉴权依赖
+│   │   ├── ragflow.py       # RAGFlow 客户端（httpx）
+│   │   └── routers/         # auth / admin / conversations / chat / knowledge_base / chat_assistant
+│   └── data/                # SQLite 数据文件（git 忽略）
+├── REFACTOR.md              # 重构方案文档
+└── README.md                # 本文档
+```
