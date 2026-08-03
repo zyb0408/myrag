@@ -2,7 +2,6 @@
 name = "ragflow-chat-server"
 version = "1.0.0"
 description = "RAGFlow Knowledge QA BFF server (Python 3.10 rewrite)"
-readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "fastapi>=0.115.0",

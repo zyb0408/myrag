@@ -123,6 +123,61 @@ curl http://localhost:3001/api/health     # → {"status":"ok"}
 
 ---
 
+## 五·补 Windows 10 运行说明
+
+**结论：可以直接在 Windows 10 上运行**。BFF 后端（Python 3.10）与前端（Vue 3/Vite）
+均为跨平台实现；唯一需要额外准备的是 **RAGFlow 服务本身**（见下文注意事项）。
+
+### 前置软件
+
+| 软件 | 版本 | 安装方式（Windows） |
+|---|---|---|
+| uv | 最新 | `winget install astral-sh.uv` 或 <https://docs.astral.sh/uv/getting-started/installation/>（uv 会自动下载 Python 3.10，**无需手动装 Python**） |
+| Node.js | **LTS 20 / 22**（Vite 6 要求 Node ^18 \|\| ^20 \|\| >=22） | <https://nodejs.org/> 下载 LTS 安装包 |
+| Git（可选） | 最新 | <https://git-scm.com/> |
+
+### 安装与启动（PowerShell）
+
+```powershell
+# 1. 后端依赖（自动下载 Python 3.10 + 依赖，生成 .venv 与 uv.lock）
+cd server
+uv sync
+
+# 2. 配置环境变量
+copy .env.example .env        # 然后编辑 .env，填入 RAGFLOW_API_KEY 等
+
+# 3. 启动后端 BFF（端口 3001）
+uv run uvicorn app.main:app --host 0.0.0.0 --port 3001
+
+# 4. 另开一个终端，启动前端（端口 5173）
+cd client
+npm install
+npm run dev
+```
+
+浏览器访问 <http://localhost:5173> 即可。
+
+### 注意事项
+
+1. **RAGFlow 服务**：RAGFlow 官方不支持 Windows 原生运行，需任选其一：
+   - 本机安装 **Docker Desktop（WSL2 后端）** 后按 RAGFlow 官方文档用 Docker 部署；
+   - 或使用局域网/云服务器上已有的 RAGFlow，把 `server/.env` 的
+     `RAGFLOW_BASE_URL` 指向其地址（如 `http://192.168.x.x:9380`）即可，本项目无需其他改动。
+2. **PowerShell 版本**：Windows PowerShell 5.1 不支持 `&&` 连接命令，请分行执行或使用
+   PowerShell 7+ / Git Bash。
+3. **中文乱码**：若控制台日志出现中文乱码，先执行 `chcp 65001`（切 UTF-8 代码页），
+   或设置环境变量 `PYTHONUTF8=1`。
+4. **防火墙**：仅本机访问无需处理；若需局域网内其他设备访问前端/后端，
+   放行 TCP 3001 与 5173 入站规则。
+5. **路径过长（可选）**：若 `npm install` 因 `node_modules` 路径过长报错，
+   可启用 Windows 长路径支持（`reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1` 后重启），
+   或改用 pnpm（`npm i -g pnpm && pnpm install`）。
+6. **从 macOS/Linux 迁移数据库（可选）**：若沿用旧库文件，拷贝 `ragflow-chat.db` 时
+   若存在同目录 `-wal`/`-shm` 文件需一并拷贝；SQLite 文件格式跨平台，Windows 直接可用。
+7. `uvicorn[standard]` 在 Windows 上会自动跳过 Linux 专属的 uvloop，回退到标准 asyncio，无需处理。
+
+---
+
 ## 六、接口文档
 
 统一响应包装：
