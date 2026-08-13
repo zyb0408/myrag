@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 对应原 client/src/components/chat/MessageBubble.tsx
 // react-markdown 迁移为 markdown-it（Vue 生态等价方案）
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import MarkdownIt from 'markdown-it';
 import { UserOutlined, RobotOutlined, FileTextOutlined } from '@ant-design/icons-vue';
 import type { Reference } from '../../types';
@@ -23,6 +23,12 @@ const renderedHtml = computed(() => (isUser.value ? '' : md.render(props.content
 
 // 引用来源（流式时来自 store，历史消息时由父组件 parse 后传入）
 const refs = computed(() => props.references ?? []);
+
+// 引用项展开/收起状态（按索引，每个消息气泡实例独立）
+const expanded = ref<Record<number, boolean>>({});
+function toggleRef(i: number) {
+  expanded.value[i] = !expanded.value[i];
+}
 </script>
 
 <template>
@@ -47,10 +53,19 @@ const refs = computed(() => props.references ?? []);
         <!-- 引用来源 -->
         <div v-if="refs.length" class="msg-bubble__refs">
           <div class="refs-title">引用来源</div>
-          <div v-for="(ref, i) in refs" :key="i" class="ref-item">
+          <div
+            v-for="(ref, i) in refs"
+            :key="i"
+            class="ref-item"
+            :class="{ 'ref-item--expanded': expanded[i] }"
+            @click="toggleRef(i)"
+          >
             <div class="ref-item__head">
               <FileTextOutlined class="ref-item__icon" />
               <span class="ref-item__name">{{ ref.document_name || '未知文档' }}</span>
+              <span v-if="ref.content" class="ref-item__toggle">
+                {{ expanded[i] ? '收起' : '展开' }}
+              </span>
             </div>
             <div v-if="ref.content" class="ref-item__content">{{ ref.content }}</div>
           </div>
@@ -151,6 +166,12 @@ const refs = computed(() => props.references ?? []);
   border-radius: 6px;
   padding: 6px 10px;
   margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.ref-item:hover {
+  border-color: #91caff;
 }
 
 .ref-item:last-child {
@@ -177,15 +198,31 @@ const refs = computed(() => props.references ?? []);
   word-break: break-all;
 }
 
+.ref-item__toggle {
+  margin-left: auto;
+  font-size: 12px;
+  color: #1677ff;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .ref-item__content {
   font-size: 12px;
   color: #595959;
   line-height: 1.6;
-  /* 限制 3 行，超出省略 */
+  /* 默认限制 3 行，超出省略；展开时由 ref-item--expanded 覆盖 */
   display: -webkit-box;
   -webkit-line-clamp: 3;
   line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* 展开后显示完整内容 */
+.ref-item--expanded .ref-item__content {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
 }
 </style>
