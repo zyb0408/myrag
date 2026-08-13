@@ -9,6 +9,7 @@ import ChatInput from './ChatInput.vue';
 import { useChatStore } from '../../stores/chat';
 import { useAppStore } from '../../stores/app';
 import { streamChat } from '../../services/sse';
+import { stopChat } from '../../services/api';
 
 const chatStore = useChatStore();
 const appStore = useAppStore();
@@ -69,6 +70,17 @@ function handleSend(content: string) {
 
   abortRef.value = controller;
 }
+
+// 停止生成：中断前端 fetch + 通知后端取消 RAGFlow 流
+function handleStop() {
+  abortRef.value?.abort();
+  abortRef.value = null;
+  chatStore.setIsStreaming(false);
+  sending.value = false;
+  if (chatStore.currentConversationId) {
+    stopChat(chatStore.currentConversationId).catch(() => {});
+  }
+}
 </script>
 
 <template>
@@ -97,6 +109,8 @@ function handleSend(content: string) {
     />
     <ChatInput
       :on-send="handleSend"
+      :on-stop="handleStop"
+      :is-streaming="chatStore.isStreaming"
       :disabled="chatStore.isStreaming || sending"
     />
   </div>

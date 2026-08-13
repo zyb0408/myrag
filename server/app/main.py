@@ -6,6 +6,8 @@
           /api/conversations, /api/chat, /api/admin, /api/health
 - Global handler for ApiError → `{"code", "message"}` (legacy contract)
 """
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,6 +15,12 @@ from fastapi.responses import JSONResponse
 from .config import PORT
 from .routers import admin, auth, chat, chat_assistant, conversations, knowledge_base
 from .security import ApiError
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 app = FastAPI(title="ragflow-chat-server", docs_url="/docs", openapi_url="/openapi.json")
 

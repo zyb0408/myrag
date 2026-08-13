@@ -5,12 +5,15 @@ Reuses the exact same database file as the legacy implementation
 (server/data/ragflow-chat.db) so existing users / conversations / messages
 keep working without any data migration.
 """
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import bcrypt
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "ragflow-chat.db"
 
@@ -86,7 +89,7 @@ def get_db() -> sqlite3.Connection:
         try:
             cols = [row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()]
             if "user_id" not in cols:
-                print("Running migration: adding user_id column to conversations")
+                logger.info("Running migration: adding user_id column to conversations")
                 conn.execute(MIGRATION)
                 conn.commit()
         except sqlite3.Error:
@@ -96,7 +99,7 @@ def get_db() -> sqlite3.Connection:
         # Seed admin user if users table is empty
         count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
         if count == 0:
-            print("Seeding default admin user...")
+            logger.info("Seeding default admin user...")
             hashed = bcrypt.hashpw(b"admin123", bcrypt.gensalt(10)).decode("utf-8")
             conn.execute(
                 "INSERT INTO users (id, username, password_hash, display_name, must_reset_password, is_active, is_admin, created_at) "
@@ -104,7 +107,7 @@ def get_db() -> sqlite3.Connection:
                 (str(uuid.uuid4()), "admin", hashed, "管理员", 1, 1, 1, utc_now_iso()),
             )
             conn.commit()
-            print("Default admin created: username=admin, password=admin123")
+            logger.info("Default admin created: username=admin, password=admin123")
 
         _conn = conn
     return _conn

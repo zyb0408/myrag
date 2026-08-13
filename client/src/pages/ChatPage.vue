@@ -14,11 +14,13 @@ onMounted(() => {
   appStore.fetchChatAssistants();
 });
 
-// 对应原 useEffect：assistant 变化时加载 conversations
+// 对应原 useEffect：assistant 变化时清空当前对话并加载 conversations
+// 切换知识库时清空当前对话，避免「下拉已切换但顶部仍显示旧对话」的不一致
 watch(
   () => appStore.selectedAssistantId,
-  (id) => {
-    if (id) {
+  (id, oldId) => {
+    if (id && id !== oldId) {
+      chatStore.setCurrentConversation(null);
       chatStore.fetchConversations(id);
     }
   }

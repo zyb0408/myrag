@@ -3,6 +3,7 @@
 
 All routes require JWT auth.
 """
+import logging
 import uuid
 from datetime import datetime
 from typing import Annotated
@@ -11,6 +12,8 @@ from fastapi import APIRouter, Depends, Request
 
 from ..db import execute, query_all, query_one, utc_now_iso
 from ..security import ApiError, AuthUser, require_auth
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -55,7 +58,7 @@ async def list_conversations(request: Request, user: CurrentUser):
             )
         return _ok(conversations)
     except Exception as e:
-        print(f"Failed to list conversations: {e}")
+        logger.exception(f"Failed to list conversations: {e}")
         raise ApiError(500, 1, str(e))
 
 
@@ -89,7 +92,7 @@ async def create_conversation(request: Request, user: CurrentUser):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Failed to create conversation: {e}")
+        logger.exception(f"Failed to create conversation: {e}")
         raise ApiError(500, 1, str(e))
 
 
@@ -115,7 +118,7 @@ async def rename_conversation(conv_id: str, request: Request, user: CurrentUser)
     except ApiError:
         raise
     except Exception as e:
-        print(f"Failed to rename conversation: {e}")
+        logger.exception(f"Failed to rename conversation: {e}")
         raise ApiError(500, 1, str(e))
 
 
@@ -125,7 +128,7 @@ async def delete_conversation(conv_id: str, user: CurrentUser):
         execute("DELETE FROM conversations WHERE id = ? AND user_id = ?", [conv_id, user.userId])
         return _ok(True)
     except Exception as e:
-        print(f"Failed to delete conversation: {e}")
+        logger.exception(f"Failed to delete conversation: {e}")
         raise ApiError(500, 1, str(e))
 
 
@@ -145,5 +148,5 @@ async def get_messages(conv_id: str, user: CurrentUser):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Failed to get messages: {e}")
+        logger.exception(f"Failed to get messages: {e}")
         raise ApiError(500, 1, str(e))

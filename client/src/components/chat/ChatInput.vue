@@ -2,13 +2,15 @@
 // 对应原 client/src/components/chat/ChatInput.tsx
 import { ref, watch, nextTick } from 'vue';
 import { Input, Button } from 'ant-design-vue';
-import { SendOutlined } from '@ant-design/icons-vue';
+import { SendOutlined, StopOutlined } from '@ant-design/icons-vue';
 
 const { TextArea } = Input;
 
 const props = defineProps<{
   onSend: (content: string) => void;
   disabled?: boolean;
+  isStreaming?: boolean;
+  onStop?: () => void;
 }>();
 
 const value = ref('');
@@ -54,7 +56,18 @@ function handleKeyDown(e: KeyboardEvent) {
         style="flex: 1; border-radius: 8px"
         @keydown="handleKeyDown"
       />
+      <!-- 流式生成中显示「停止」按钮，中断当前生成 -->
       <Button
+        v-if="isStreaming"
+        danger
+        style="border-radius: 8px"
+        @click="onStop"
+      >
+        <template #icon><StopOutlined /></template>
+        停止
+      </Button>
+      <Button
+        v-else
         type="primary"
         :disabled="disabled || !value.trim()"
         style="border-radius: 8px"

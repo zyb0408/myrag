@@ -3,6 +3,7 @@
 
 All routes require JWT auth + admin role.
 """
+import logging
 import uuid
 from typing import Annotated
 
@@ -10,6 +11,8 @@ from fastapi import APIRouter, Depends, Request
 
 from ..db import execute, query_all, query_one, utc_now_iso
 from ..security import ApiError, AuthUser, hash_password, require_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -89,7 +92,7 @@ async def create_user(user: AdminUser, request: Request):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Create user error: {e}")
+        logger.exception(f"Create user error: {e}")
         raise ApiError(500, 1, "创建用户失败")
 
 
@@ -117,7 +120,7 @@ async def delete_user(user_id: str, user: AdminUser):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Delete user error: {e}")
+        logger.exception(f"Delete user error: {e}")
         raise ApiError(500, 1, "删除用户失败")
 
 

@@ -78,3 +78,8 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
   const resp = await request<ApiResponse<Message[]>>(`/conversations/${conversationId}/messages`);
   return resp.data;
 }
+
+// Chat
+export async function stopChat(convId: string): Promise<void> {
+  await request(`/chat/${convId}/stop`, { method: 'POST' });
+}

@@ -4,8 +4,13 @@
 POST /api/chat/{convId} proxies an OpenAI-compatible streaming chat completion
 from RAGFlow and forwards each SSE `data:` event to the browser verbatim,
 finishing with `data: [DONE]` (or `data: {"error": ...}` on failure).
+
+POST /api/chat/{convId}/stop interrupts an in-flight generation by signalling
+the asyncio.Event registered for that conversation.
 """
+import asyncio
 import json
+import logging
 import uuid
 from typing import Annotated
 
@@ -16,9 +21,15 @@ from ..db import execute, query_all, query_one, utc_now_iso
 from ..ragflow import ragflow_service
 from ..security import ApiError, AuthUser, require_auth
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 CurrentUser = Annotated[AuthUser, Depends(require_auth)]
+
+# Maps conversation_id -> asyncio.Event for in-flight streams,
+# so POST /{conv_id}/stop can interrupt the corresponding generation.
+_active_streams: dict[str, asyncio.Event] = {}
 
 
 async def _parse_body(request: Request) -> dict:
@@ -53,8 +64,16 @@ def _simplify_references(refs: list) -> list:
 
 @router.post("/{conv_id}/stop")
 async def stop_chat(conv_id: str, user: CurrentUser):
-    # Placeholder implementation — same behavior as the legacy backend
-    return {"code": 0, "data": {"stopped": True}}
+    # Verify ownership so a user cannot stop another user's stream
+    conv = query_one("SELECT id FROM conversations WHERE id = ? AND user_id = ?", [conv_id, user.userId])
+    if not conv:
+        raise ApiError(404, 1, "Conversation not found")
+
+    event = _active_streams.get(conv_id)
+    if event:
+        event.set()
+        logger.info("Stop requested for conversation %s", conv_id)
+    return {"code": 0, "data": {"stopped": bool(event)}}
 
 
 @router.post("/{conv_id}")
@@ -98,12 +117,18 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         await client.aclose()
         raise ApiError(500, 1, "RAGFlow API error")
 
+    # Register a cancel event so POST /{conv_id}/stop can interrupt the stream
+    cancel_event = asyncio.Event()
+    _active_streams[conv_id] = cancel_event
+
     async def event_stream():
         buffer = ""
         full_content = ""
         references: list = []
         try:
             async for chunk in resp.aiter_bytes():
+                if cancel_event.is_set():
+                    break
                 buffer += chunk.decode("utf-8", errors="replace")
                 lines = buffer.split("\n")
                 buffer = lines.pop()
@@ -131,7 +156,8 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                         # Forward the SSE event to the client
                         yield f"{line}\n\n"
 
-            # Save assistant message (persist references as JSON text)
+            # Save assistant message (persist references as JSON text).
+            # Also runs after a stop (break): the partial answer is persisted.
             if full_content:
                 assistant_msg_id = str(uuid.uuid4())
                 ref_json = json.dumps(references, ensure_ascii=False) if references else None
@@ -148,10 +174,11 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
             # Send DONE signal
             yield "data: [DONE]\n\n"
         except Exception as e:
-            print(f"Stream read error: {e}")
+            logger.exception("Stream read error")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
+            _active_streams.pop(conv_id, None)
             await resp.aclose()
             await client.aclose()
 

@@ -3,10 +3,13 @@
 
 Public routes — no JWT required.
 """
+import logging
 from fastapi import APIRouter, Depends, Request
 
 from ..db import query_one, execute
 from ..security import ApiError, AuthUser, generate_token, hash_password, require_auth, verify_password
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,7 +59,7 @@ async def login(request: Request):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Login error: {e}")
+        logger.exception(f"Login error: {e}")
         raise ApiError(500, 1, "登录失败")
 
 
@@ -90,7 +93,7 @@ async def reset_password(request: Request):
     except ApiError:
         raise
     except Exception as e:
-        print(f"Reset password error: {e}")
+        logger.exception(f"Reset password error: {e}")
         raise ApiError(500, 1, "修改密码失败")
 
 
