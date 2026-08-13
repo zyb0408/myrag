@@ -21,7 +21,9 @@
 2. **权限管理**：普通用户 / 管理员两级角色，管理员可管理用户（创建、删除、重置密码）；
 3. **知识库与助手**：透传 RAGFlow 的知识库（dataset）列表与聊天助手（chat）列表；
 4. **对话管理**：本地 SQLite 持久化对话与消息（按用户隔离）；
-5. **流式问答**：通过 BFF 调用 RAGFlow 的 OpenAI 兼容接口，以 SSE 流式转发到前端。
+5. **流式问答**：通过 BFF 调用 RAGFlow 的 OpenAI 兼容接口，以 SSE 流式转发到前端；
+6. **引用来源**：流式回答附带 RAGFlow 检索到的引用片段（文档名 + 内容摘要），随回答一起下发并在前端渲染，同时持久化到消息记录；
+7. **停止生成**：流式回答过程中可随时中断，后端真正取消 RAGFlow 流，已生成的部分内容仍会保存到对话历史。
 
 架构总览：
 
@@ -225,17 +227,24 @@ npm run dev
 `Conversation = { id, name, assistant_id, kb_id, kb_name, user_id, created_at, updated_at }`
 `Message = { id, conversation_id, role, content, references, created_at }`
 
+> `references` 为 JSON 文本字符串，仅 assistant 消息有值，结构为 `[{document_name, content, document_id, dataset_id}]`；user 消息为 `null`。
+
 ### 5. 聊天 `/api/chat`（需 JWT）
 
 | 方法 | 路径 | 请求体 | 响应 |
 |---|---|---|---|
 | POST | `/api/chat/:convId` | `{content}` | SSE 流式（见下） |
-| POST | `/api/chat/:convId/stop` | — | `{code:0, data:{stopped:true}}` |
+| POST | `/api/chat/:convId/stop` | — | `{code:0, data:{stopped:bool}}`，真实中断对应 RAGFlow 流 |
+
+> BFF 向 RAGFlow 请求时带 `reference: true`，RAGFlow 会在最后一个 chunk 返回引用信息；
+> BFF 解析后精简为 `{document_name, content, document_id, dataset_id}` 列表，在流结束前以独立事件下发，并写入 `messages.references`（JSON 文本）。
+> `stop` 接口会校验对话归属，通过 `asyncio.Event` 中断该对话正在进行的流式生成；中断后已生成的内容仍会落库。
 
 SSE 事件格式（与前端 `client/src/services/sse.ts` 解析完全一致）：
 
 ```
 data: {"choices":[{"delta":{"content":"..."}}]}   ← RAGFlow 增量文本，逐条透传
+data: {"references":[{...}]}                      ← 引用来源列表（流结束前发送一次）
 data: [DONE]                                       ← 流结束
 data: {"error":"..."}                              ← 出错时发送，随后 [DONE]
 ```
