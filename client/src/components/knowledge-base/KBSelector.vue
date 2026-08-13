@@ -46,8 +46,8 @@ function handleChange(value: any) {
       <template #option="{ label, data }">
         <div>
           <div style="font-weight: 500">{{ label }}</div>
-          <div v-if="data.kbName" style="font-size: 12px; color: #999">
-            知识库: {{ data.kbName }}
+          <div v-if="data?.kbName" style="font-size: 12px; color: #999">
+            知识库: {{ data?.kbName }}
           </div>
         </div>
       </template>
