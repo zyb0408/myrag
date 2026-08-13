@@ -32,6 +32,7 @@ function handleSend(content: string) {
 
   sending.value = true;
   chatStore.setIsStreaming(true);
+  chatStore.setStreamReferences([]);
 
   // Optimistic user message
   const userMsg = {
@@ -49,6 +50,11 @@ function handleSend(content: string) {
       chatStore.appendStreamContent(`\n\n[错误: ${chunk.error}]`);
       chatStore.setIsStreaming(false);
       sending.value = false;
+      return;
+    }
+
+    if (chunk.references) {
+      chatStore.setStreamReferences(chunk.references);
       return;
     }
 
@@ -86,6 +92,7 @@ function handleSend(content: string) {
     <MessageList
       :messages="chatStore.messages"
       :streaming-content="chatStore.streamingContent"
+      :streaming-references="chatStore.streamingReferences"
       :is-streaming="chatStore.isStreaming"
     />
     <ChatInput

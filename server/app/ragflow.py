@@ -78,7 +78,7 @@ class RAGFlowService:
                 "POST",
                 url,
                 headers=self.headers,
-                json={"model": "model", "messages": messages, "stream": stream},
+                json={"model": "model", "messages": messages, "stream": stream, "reference": True},
             )
             resp = await client.send(req, stream=True)
         except Exception:

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import type { Conversation, Message } from '../types';
+import type { Conversation, Message, Reference } from '../types';
 import { getConversations, getMessages } from '../services/api';
 
 export const useChatStore = defineStore('chat', {
@@ -10,6 +10,7 @@ export const useChatStore = defineStore('chat', {
     messages: [] as Message[],
     loadingMessages: false,
     streamingContent: '',
+    streamingReferences: [] as Reference[],
     isStreaming: false,
   }),
 
@@ -29,6 +30,7 @@ export const useChatStore = defineStore('chat', {
       this.currentConversationId = id;
       this.messages = [];
       this.streamingContent = '';
+      this.streamingReferences = [];
     },
 
     async fetchMessages(convId: string) {
@@ -54,18 +56,24 @@ export const useChatStore = defineStore('chat', {
       this.streamingContent += chunk;
     },
 
+    setStreamReferences(refs: Reference[]) {
+      this.streamingReferences = refs;
+    },
+
     setIsStreaming(v: boolean) {
       this.isStreaming = v;
     },
 
     resetStreaming() {
       this.streamingContent = '';
+      this.streamingReferences = [];
       this.isStreaming = false;
     },
 
     clearMessages() {
       this.messages = [];
       this.streamingContent = '';
+      this.streamingReferences = [];
     },
   },
 });

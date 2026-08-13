@@ -29,6 +29,28 @@ async def _parse_body(request: Request) -> dict:
         return {}
 
 
+def _simplify_references(refs: list) -> list:
+    """Extract display-relevant fields from RAGFlow citation chunks.
+
+    RAGFlow returns rich citation objects; we keep only what the UI needs and
+    tolerate field-name variants across versions (document_name vs docnm_kwd,
+    document_id vs doc_id, ...).
+    """
+    simplified = []
+    for r in refs:
+        if not isinstance(r, dict):
+            continue
+        simplified.append(
+            {
+                "document_name": r.get("document_name") or r.get("docnm_kwd") or "",
+                "content": r.get("content") or r.get("content_with_weight") or "",
+                "document_id": r.get("document_id") or r.get("doc_id") or "",
+                "dataset_id": r.get("dataset_id") or r.get("kb_id") or "",
+            }
+        )
+    return simplified
+
+
 @router.post("/{conv_id}/stop")
 async def stop_chat(conv_id: str, user: CurrentUser):
     # Placeholder implementation — same behavior as the legacy backend
@@ -79,6 +101,7 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
     async def event_stream():
         buffer = ""
         full_content = ""
+        references: list = []
         try:
             async for chunk in resp.aiter_bytes():
                 buffer += chunk.decode("utf-8", errors="replace")
@@ -97,6 +120,10 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                             text = delta.get("content") or ""
                             if text:
                                 full_content += text
+                            # Citations arrive in the final chunk's delta.reference
+                            ref_raw = delta.get("reference")
+                            if isinstance(ref_raw, list) and ref_raw:
+                                references = _simplify_references(ref_raw)
                         except Exception:
                             # Skip unparseable chunks
                             pass
@@ -104,14 +131,19 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                         # Forward the SSE event to the client
                         yield f"{line}\n\n"
 
-            # Save assistant message
+            # Save assistant message (persist references as JSON text)
             if full_content:
                 assistant_msg_id = str(uuid.uuid4())
+                ref_json = json.dumps(references, ensure_ascii=False) if references else None
                 execute(
                     'INSERT INTO messages (id, conversation_id, role, content, "references", created_at) '
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    [assistant_msg_id, conv_id, "assistant", full_content, None, utc_now_iso()],
+                    [assistant_msg_id, conv_id, "assistant", full_content, ref_json, utc_now_iso()],
                 )
+
+            # Emit a dedicated references event so the client can render sources
+            if references:
+                yield f"data: {json.dumps({'references': references}, ensure_ascii=False)}\n\n"
 
             # Send DONE signal
             yield "data: [DONE]\n\n"

@@ -1,9 +1,11 @@
 import { getToken } from './api';
+import type { Reference } from '../types';
 
 export interface SSEChunk {
   content: string;
   done: boolean;
   error?: string;
+  references?: Reference[];
 }
 
 export function streamChat(
@@ -69,6 +71,11 @@ export function streamChat(
 
             try {
               const parsed = JSON.parse(data);
+              // BFF custom event: {"references": [...]} (sent just before [DONE])
+              if (Array.isArray(parsed.references)) {
+                onChunk({ content: '', done: false, references: parsed.references });
+                continue;
+              }
               const text = parsed.choices?.[0]?.delta?.content || '';
               if (text) {
                 onChunk({ content: text, done: false });

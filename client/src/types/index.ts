@@ -46,6 +46,14 @@ export interface Message {
   created_at: string;
 }
 
+// ===== Citation source (from RAGFlow, simplified by BFF) =====
+export interface Reference {
+  document_name: string;
+  content: string;
+  document_id: string;
+  dataset_id: string;
+}
+
 // ===== API Response =====
 export interface ApiResponse<T> {
   code: number;
