@@ -2,7 +2,7 @@ import type { ApiResponse, KnowledgeBase, ChatAssistant, Conversation, Message }
 
 const API_BASE = '/api';
 
-function getToken(): string | null {
+export function getToken(): string | null {
   return localStorage.getItem('ragflow_chat_token');
 }
 

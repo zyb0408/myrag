@@ -1,3 +1,5 @@
+import { getToken } from './api';
+
 export interface SSEChunk {
   content: string;
   done: boolean;
@@ -11,9 +13,15 @@ export function streamChat(
 ): AbortController {
   const controller = new AbortController();
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   fetch(`/api/chat/${convId}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ content }),
     signal: controller.signal,
   })
