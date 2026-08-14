@@ -11,11 +11,15 @@ Endpoints follow the official RAGFlow Python API reference
 
 Auth: `Authorization: Bearer <RAGFLOW_API_KEY>`, `Content-Type: application/json`.
 """
+import logging
+
 import httpx
 
-from .config import RAGFLOW_API_KEY, RAGFLOW_BASE_URL
+from .config import RAGFLOW_API_KEY, RAGFLOW_API_VERSION, RAGFLOW_BASE_URL
 
 REQUEST_TIMEOUT = 30.0  # seconds for non-streaming calls
+
+logger = logging.getLogger(__name__)
 
 
 class RAGFlowService:
@@ -70,32 +74,51 @@ class RAGFlowService:
 
         Returns the (client, response) pair; the caller must consume the body and
         close both. `stream=True` keeps the connection open for SSE forwarding.
+
+        Supports both RAGFlow v0.24+ (extra_body format) and older versions
+        (top-level reference parameter).
         """
         url = f"{self.base_url}/api/v1/openai/{assistant_id}/chat/completions"
         client = httpx.AsyncClient(timeout=None)
-        try:
-            # RAGFlow OpenAI-compatible API (v0.24+):
-            # `reference` / `reference_metadata` 必须放入 extra_body 中；
-            # 顶层仅保留 model / messages / stream 字段，以兼容最新版服务端。
-            req = client.build_request(
-                "POST",
-                url,
-                headers=self.headers,
-                json={
-                    "model": "model",
-                    "messages": messages,
-                    "stream": stream,
-                    "extra_body": {
-                        "reference": True,
-                        "reference_metadata": {"include": True},
-                    },
+
+        # Build request payload based on configured API version
+        if RAGFLOW_API_VERSION == "v0.24+":
+            # v0.24+ format: reference and reference_metadata go into extra_body
+            payload = {
+                "model": "model",
+                "messages": messages,
+                "stream": stream,
+                "extra_body": {
+                    "reference": True,
+                    "reference_metadata": {"include": True},
                 },
-            )
+            }
+        else:
+            # Legacy format (pre-v0.24): reference is a top-level parameter
+            payload = {
+                "model": "model",
+                "messages": messages,
+                "stream": stream,
+                "reference": True,
+            }
+
+        logger.info("Using RAGFlow API version: %s, payload keys: %s", RAGFLOW_API_VERSION, list(payload.keys()))
+
+        try:
+            req = client.build_request("POST", url, headers=self.headers, json=payload)
             resp = await client.send(req, stream=True)
+
+            if resp.status_code >= 400:
+                error_text = await resp.aread()
+                error_detail = error_text.decode('utf-8', errors='replace')
+                await resp.aclose()
+                await client.aclose()
+                raise RuntimeError(f"RAGFlow API error ({resp.status_code}): {error_detail}")
+
+            return client, resp
         except Exception:
             await client.aclose()
             raise
-        return client, resp
 
 
 ragflow_service = RAGFlowService()
