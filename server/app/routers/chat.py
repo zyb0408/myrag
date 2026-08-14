@@ -125,9 +125,13 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         buffer = ""
         full_content = ""
         references: list = []
+        chunk_count = 0
+        final_content_seen = False
         try:
+            logger.info("Starting SSE stream for conversation %s (assistant: %s)", conv_id, conv["assistant_id"])
             async for chunk in resp.aiter_bytes():
                 if cancel_event.is_set():
+                    logger.info("Stream cancelled for conversation %s", conv_id)
                     break
                 buffer += chunk.decode("utf-8", errors="replace")
                 lines = buffer.split("\n")
@@ -141,20 +145,43 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
 
                         try:
                             parsed = json.loads(data)
-                            delta = (parsed.get("choices") or [{}])[0].get("delta") or {}
+                            choice = (parsed.get("choices") or [{}])[0]
+                            delta = choice.get("delta") or {}
+
+                            # 1) 增量文本（流式 token）
                             text = delta.get("content") or ""
                             if text:
                                 full_content += text
-                            # Citations arrive in the final chunk's delta.reference
+
+                            # 2) RAGFlow 新字段：final_content（最终完整答案）
+                            #    当 RAGFlow 通过 `extra_body.reference=true` 请求时，
+                            #    最终分块中的 `final_content` 才是完整答复；
+                            #    增量 `delta.content` 可能为空。
+                            final_content = parsed.get("final_content") or delta.get("final_content")
+                            if final_content and isinstance(final_content, str) and not final_content_seen:
+                                final_content_seen = True
+                                logger.info("RAGFlow final_content received (%d chars)", len(final_content))
+                                # 以 final_content 作为最终答案；若之前已累积部分增量则合并
+                                if final_content.strip():
+                                    full_content = final_content
+
+                            # 3) 引用：可能位于 delta.reference 或顶层 reference 字段
                             ref_raw = delta.get("reference")
+                            if not isinstance(ref_raw, list) or not ref_raw:
+                                ref_raw = parsed.get("reference")
                             if isinstance(ref_raw, list) and ref_raw:
                                 references = _simplify_references(ref_raw)
                         except Exception:
                             # Skip unparseable chunks
+                            logger.debug("Skipping unparseable SSE data: %s", data[:100])
                             pass
 
+                        chunk_count += 1
                         # Forward the SSE event to the client
                         yield f"{line}\n\n"
+
+            logger.info("Stream finished for conversation %s: %d chunks, %d chars content, %d references",
+                        conv_id, chunk_count, len(full_content), len(references))
 
             # Save assistant message (persist references as JSON text).
             # Also runs after a stop (break): the partial answer is persisted.
@@ -166,21 +193,32 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     [assistant_msg_id, conv_id, "assistant", full_content, ref_json, utc_now_iso()],
                 )
+                logger.info("Assistant message saved for conversation %s", conv_id)
+            else:
+                logger.warning("No content received from RAGFlow for conversation %s", conv_id)
 
             # Emit a dedicated references event so the client can render sources
             if references:
                 yield f"data: {json.dumps({'references': references}, ensure_ascii=False)}\n\n"
 
+            # Emit the final (complete) content so the frontend can fill the
+            # assistant bubble even when RAGFlow's incremental `delta.content`
+            # is empty (newer RAGFlow versions expose the full answer via
+            # `final_content` on the last chunk).
+            if final_content_seen and full_content:
+                yield f"data: {json.dumps({'final_content': full_content}, ensure_ascii=False)}\n\n"
+
             # Send DONE signal
             yield "data: [DONE]\n\n"
         except Exception as e:
-            logger.exception("Stream read error")
+            logger.exception("Stream read error for conversation %s", conv_id)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
             _active_streams.pop(conv_id, None)
             await resp.aclose()
             await client.aclose()
+            logger.info("Stream resources cleaned up for conversation %s", conv_id)
 
     return StreamingResponse(
         event_stream(),

@@ -74,11 +74,22 @@ class RAGFlowService:
         url = f"{self.base_url}/api/v1/openai/{assistant_id}/chat/completions"
         client = httpx.AsyncClient(timeout=None)
         try:
+            # RAGFlow OpenAI-compatible API (v0.24+):
+            # `reference` / `reference_metadata` 必须放入 extra_body 中；
+            # 顶层仅保留 model / messages / stream 字段，以兼容最新版服务端。
             req = client.build_request(
                 "POST",
                 url,
                 headers=self.headers,
-                json={"model": "model", "messages": messages, "stream": stream, "reference": True},
+                json={
+                    "model": "model",
+                    "messages": messages,
+                    "stream": stream,
+                    "extra_body": {
+                        "reference": True,
+                        "reference_metadata": {"include": True},
+                    },
+                },
             )
             resp = await client.send(req, stream=True)
         except Exception:
