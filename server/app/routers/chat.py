@@ -17,6 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from ..config import RAGFLOW_API_VERSION, RAGFLOW_BASE_URL
 from ..db import execute, query_all, query_one, utc_now_iso
 from ..ragflow import ragflow_service
 from ..security import ApiError, AuthUser, require_auth
@@ -60,6 +61,44 @@ def _simplify_references(refs: list) -> list:
             }
         )
     return simplified
+
+
+async def _stream_from_non_streaming(body: dict, conv_id: str):
+    """Convert a non-streaming RAGFlow response body into SSE events."""
+    try:
+        choices = body.get("choices", [])
+        full_content = ""
+        references: list = []
+
+        if choices:
+            message = choices[0].get("message", {})
+            full_content = message.get("content", "") or ""
+
+            ref_data = body.get("reference") or choices[0].get("reference") or []
+            if isinstance(ref_data, list):
+                references = _simplify_references(ref_data)
+
+        # Yield the content as a single SSE event
+        if full_content:
+            # Simulate an SSE chunk with the full content
+            chunk = {
+                "choices": [{
+                    "delta": {"content": full_content},
+                    "index": 0,
+                }],
+            }
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+        # Emit references event
+        if references:
+            yield f"data: {json.dumps({'references': references}, ensure_ascii=False)}\n\n"
+
+        # Send DONE
+        yield "data: [DONE]\n\n"
+    except Exception as e:
+        logger.exception("Error converting non-streaming response to SSE for conversation %s", conv_id)
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 @router.post("/{conv_id}/stop")
@@ -110,7 +149,73 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Call RAGFlow with streaming
-    client, resp = await ragflow_service.chat_completion(conv["assistant_id"], messages, True)
+    try:
+        client, resp = await ragflow_service.chat_completion(conv["assistant_id"], messages, True)
+    except Exception as e:
+        logger.error("RAGFlow chat_completion failed: %s", e)
+        # Fallback: try non-streaming request
+        logger.warning("Attempting non-streaming fallback for conversation %s...", conv_id)
+        try:
+            import httpx as _httpx
+            url = f"{RAGFLOW_BASE_URL}/api/v1/openai/{conv['assistant_id']}/chat/completions"
+            fallback_payload = {
+                "model": "model",
+                "messages": messages,
+                "stream": False,
+            }
+            if RAGFLOW_API_VERSION == "v0.24+":
+                fallback_payload["extra_body"] = {"reference": True, "reference_metadata": {"include": True}}
+            else:
+                fallback_payload["reference"] = True
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(60.0)) as fb_client:
+                fb_resp = await fb_client.post(url, headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {ragflow_service.api_key}",
+                }, json=fallback_payload)
+                logger.info("Non-streaming response: status=%d", fb_resp.status_code)
+                if fb_resp.status_code < 400:
+                    fb_body = fb_resp.json()
+                    logger.info("Non-streaming body: %s", json.dumps(fb_body, ensure_ascii=False)[:1000])
+
+                    # Extract content and references
+                    fb_choices = fb_body.get("choices", [])
+                    fb_content = ""
+                    fb_refs: list = []
+                    if fb_choices:
+                        fb_msg = fb_choices[0].get("message", {})
+                        fb_content = fb_msg.get("content", "") or ""
+                        ref_raw = fb_body.get("reference") or fb_choices[0].get("reference") or []
+                        if isinstance(ref_raw, list):
+                            fb_refs = _simplify_references(ref_raw)
+
+                    # Save assistant message
+                    if fb_content:
+                        asst_msg_id = str(uuid.uuid4())
+                        ref_json = json.dumps(fb_refs, ensure_ascii=False) if fb_refs else None
+                        execute(
+                            'INSERT INTO messages (id, conversation_id, role, content, "references", created_at) '
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            [asst_msg_id, conv_id, "assistant", fb_content, ref_json, utc_now_iso()],
+                        )
+                        logger.info("Assistant message saved (non-streaming) for conversation %s", conv_id)
+
+                    return StreamingResponse(
+                        _stream_from_non_streaming(fb_body, conv_id),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                else:
+                    logger.error("Non-streaming fallback failed: status=%d, body=%s", fb_resp.status_code, fb_resp.text[:500])
+                    raise ApiError(500, 1, f"RAGFlow API error: {fb_resp.status_code}")
+        except ApiError:
+            raise
+        except Exception as fallback_err:
+            logger.error("Non-streaming fallback also failed: %s", fallback_err)
+            raise ApiError(500, 1, f"RAGFlow API error: {e}")
 
     if resp.status_code >= 400:
         await resp.aclose()
@@ -118,9 +223,11 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         raise ApiError(500, 1, "RAGFlow API error")
 
     # Log response headers for debugging
-    logger.info("RAGFlow response: status=%d, content-type=%s", 
+    logger.info("RAGFlow response: status=%d, content-type=%s, transfer-encoding=%s, content-length=%s", 
                 resp.status_code, 
-                resp.headers.get('content-type', 'unknown'))
+                resp.headers.get('content-type', 'unknown'),
+                resp.headers.get('transfer-encoding', 'unknown'),
+                resp.headers.get('content-length', 'unknown'))
 
     # Register a cancel event so POST /{conv_id}/stop can interrupt the stream
     cancel_event = asyncio.Event()
@@ -137,6 +244,8 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
             logger.info("Starting SSE stream for conversation %s (assistant: %s)", conv_id, conv["assistant_id"])
             async for chunk in resp.aiter_bytes():
                 raw_chunks += 1
+                if raw_chunks <= 3:
+                    logger.info("SSE chunk #%d: %d bytes, preview=%s", raw_chunks, len(chunk), chunk.decode("utf-8", errors="replace")[:200])
                 if cancel_event.is_set():
                     logger.info("Stream cancelled for conversation %s", conv_id)
                     break
@@ -193,6 +302,53 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
             # Debug: if we received data but no parsed chunks, log the buffer content
             if raw_chunks > 0 and chunk_count == 0 and buffer:
                 logger.warning("Raw data received but no valid SSE chunks parsed. Buffer preview: %s", buffer[:500])
+
+            # Fallback: if streaming yielded nothing, try reading the body directly
+            if raw_chunks == 0:
+                logger.warning("Stream yielded 0 chunks for conversation %s. Attempting to read body directly...", conv_id)
+                try:
+                    remaining = await resp.aread()
+                    if remaining:
+                        logger.warning("Found %d unread bytes after stream ended. Body: %s", len(remaining), remaining.decode("utf-8", errors="replace")[:500])
+                    else:
+                        logger.warning("No unread body bytes remaining after stream ended. Response body was empty.")
+                except Exception as e:
+                    logger.warning("Could not read remaining body: %s", e)
+
+                # Attempt a non-streaming fallback: make a new request without stream
+                logger.warning("Attempting non-streaming fallback for conversation %s...", conv_id)
+                try:
+                    import httpx as _httpx
+                    url = f"{RAGFLOW_BASE_URL}/api/v1/openai/{conv['assistant_id']}/chat/completions"
+                    fallback_payload = {
+                        "model": "model",
+                        "messages": messages,
+                        "stream": False,
+                    }
+                    if RAGFLOW_API_VERSION == "v0.24+":
+                        fallback_payload["extra_body"] = {"reference": True, "reference_metadata": {"include": True}}
+                    else:
+                        fallback_payload["reference"] = True
+                    async with _httpx.AsyncClient(timeout=_httpx.Timeout(60.0)) as fb_client:
+                        fb_resp = await fb_client.post(url, headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {ragflow_service.api_key}",
+                        }, json=fallback_payload)
+                        if fb_resp.status_code < 400:
+                            fb_body = fb_resp.json()
+                            logger.warning("Non-streaming fallback response: %s", json.dumps(fb_body, ensure_ascii=False)[:1000])
+                            choices = fb_body.get("choices", [])
+                            if choices:
+                                msg = choices[0].get("message", {})
+                                full_content = msg.get("content", "") or ""
+                                ref_data = fb_body.get("reference") or choices[0].get("reference") or []
+                                if isinstance(ref_data, list):
+                                    references = _simplify_references(ref_data)
+                                logger.info("Non-streaming fallback recovered %d chars content, %d references", len(full_content), len(references))
+                        else:
+                            logger.warning("Non-streaming fallback failed with status %d: %s", fb_resp.status_code, fb_resp.text[:500])
+                except Exception as e:
+                    logger.warning("Non-streaming fallback exception: %s", e)
 
             # Save assistant message (persist references as JSON text).
             # Also runs after a stop (break): the partial answer is persisted.

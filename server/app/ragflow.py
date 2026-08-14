@@ -11,6 +11,7 @@ Endpoints follow the official RAGFlow Python API reference
 
 Auth: `Authorization: Bearer <RAGFLOW_API_KEY>`, `Content-Type: application/json`.
 """
+import json
 import logging
 
 import httpx
@@ -103,17 +104,35 @@ class RAGFlowService:
             }
 
         logger.info("Using RAGFlow API version: %s, payload keys: %s", RAGFLOW_API_VERSION, list(payload.keys()))
+        logger.info("RAGFlow request: POST %s, payload=%s", url, json.dumps(payload, ensure_ascii=False))
 
         try:
             req = client.build_request("POST", url, headers=self.headers, json=payload)
             resp = await client.send(req, stream=True)
 
+            # Log full response headers for debugging
+            header_dict = dict(resp.headers)
+            logger.info("RAGFlow response: status=%d, headers=%s", resp.status_code, header_dict)
+
             if resp.status_code >= 400:
                 error_text = await resp.aread()
                 error_detail = error_text.decode('utf-8', errors='replace')
+                logger.error("RAGFlow API error: %s", error_detail[:500])
                 await resp.aclose()
                 await client.aclose()
                 raise RuntimeError(f"RAGFlow API error ({resp.status_code}): {error_detail}")
+
+            # If response is not SSE (content-type doesn't contain text/event-stream),
+            # the stream iterator may yield nothing. Fall back to reading full body.
+            content_type = resp.headers.get("content-type", "")
+            if "text/event-stream" not in content_type:
+                logger.warning("RAGFlow response content-type is '%s', not 'text/event-stream'. This may cause streaming issues.", content_type)
+                body_bytes = await resp.aread()
+                body_text = body_bytes.decode("utf-8", errors="replace")
+                logger.warning("RAGFlow non-SSE response body (first 1000 chars): %s", body_text[:1000])
+                await resp.aclose()
+                await client.aclose()
+                raise RuntimeError(f"RAGFlow returned non-SSE response (content-type: {content_type}). Body: {body_text[:500]}")
 
             return client, resp
         except Exception:
