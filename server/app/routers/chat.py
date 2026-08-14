@@ -117,6 +117,11 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         await client.aclose()
         raise ApiError(500, 1, "RAGFlow API error")
 
+    # Log response headers for debugging
+    logger.info("RAGFlow response: status=%d, content-type=%s", 
+                resp.status_code, 
+                resp.headers.get('content-type', 'unknown'))
+
     # Register a cancel event so POST /{conv_id}/stop can interrupt the stream
     cancel_event = asyncio.Event()
     _active_streams[conv_id] = cancel_event
@@ -126,10 +131,12 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         full_content = ""
         references: list = []
         chunk_count = 0
+        raw_chunks = 0
         final_content_seen = False
         try:
             logger.info("Starting SSE stream for conversation %s (assistant: %s)", conv_id, conv["assistant_id"])
             async for chunk in resp.aiter_bytes():
+                raw_chunks += 1
                 if cancel_event.is_set():
                     logger.info("Stream cancelled for conversation %s", conv_id)
                     break
@@ -180,8 +187,12 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                         # Forward the SSE event to the client
                         yield f"{line}\n\n"
 
-            logger.info("Stream finished for conversation %s: %d chunks, %d chars content, %d references",
-                        conv_id, chunk_count, len(full_content), len(references))
+            logger.info("Stream finished for conversation %s: %d raw_chunks, %d parsed_chunks, %d chars content, %d references",
+                        conv_id, raw_chunks, chunk_count, len(full_content), len(references))
+
+            # Debug: if we received data but no parsed chunks, log the buffer content
+            if raw_chunks > 0 and chunk_count == 0 and buffer:
+                logger.warning("Raw data received but no valid SSE chunks parsed. Buffer preview: %s", buffer[:500])
 
             # Save assistant message (persist references as JSON text).
             # Also runs after a stop (break): the partial answer is persisted.
