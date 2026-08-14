@@ -55,9 +55,11 @@ export function streamChat(
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
+          // SSE spec: field is "data:", value may optionally start with a space
+          // RAGFlow sends "data:{...}" without space; OpenAI sends "data: {...}" with space
+          if (!line.startsWith('data:')) continue;
 
-          const data = line.slice(6).trim();
+          const data = line.slice(5).trim(); // strip "data:" prefix and optional space
 
           if (data === '[DONE]') {
             onChunk({ content: '', done: true });

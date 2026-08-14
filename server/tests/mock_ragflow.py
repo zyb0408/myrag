@@ -100,10 +100,10 @@ class MockHandler(BaseHTTPRequestHandler):
             self.end_headers()
             for piece in STREAM_PIECES:
                 event = {"choices": [{"delta": {"content": piece}}]}
-                self.wfile.write(f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data:{json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
                 time.sleep(0.05)
-            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.write(b"data:[DONE]\n\n")
             self.wfile.flush()
             # Terminate the response body (no Content-Length / no chunked encoding here);
             # real RAGFlow ends the stream via chunked encoding termination.

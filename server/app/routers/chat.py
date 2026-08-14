@@ -266,9 +266,17 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                 lines = buffer.split("\n")
                 buffer = lines.pop()
 
+                # Log first few lines after split for debugging
+                if raw_chunks <= 3 and lines:
+                    for i, l in enumerate(lines[:2]):
+                        logger.info("Line %d after split (raw_chunks=%d): starts_with_data=%s, first_30_chars=%s",
+                                    i, raw_chunks, l.startswith("data:"), repr(l[:30]))
+
                 for line in lines:
-                    if line.startswith("data: "):
-                        data = line[6:].strip()
+                    # SSE spec: field is "data:", value may optionally start with a space
+                    # RAGFlow sends "data:{...}" without space; OpenAI sends "data: {...}" with space
+                    if line.startswith("data:"):
+                        data = line[5:].lstrip()  # strip "data:" prefix and optional space
                         if data == "[DONE]":
                             continue
 
