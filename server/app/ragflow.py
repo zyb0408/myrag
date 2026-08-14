@@ -7,7 +7,7 @@ Endpoints follow the official RAGFlow Python API reference
 - GET  /api/v1/datasets?page=1&page_size=100            list datasets
 - GET  /api/v1/chats                                    list chat assistants
 - GET  /api/v1/chats/{id}                               single chat assistant
-- POST /api/v1/openai/{chat_id}/chat/completions        OpenAI-compatible chat completion (SSE)
+- POST /api/v1/chats_openai/{chat_id}/chat/completions  OpenAI-compatible chat completion (SSE)
 
 Auth: `Authorization: Bearer <RAGFLOW_API_KEY>`, `Content-Type: application/json`.
 """
@@ -79,7 +79,7 @@ class RAGFlowService:
         Supports both RAGFlow v0.24+ (extra_body format) and older versions
         (top-level reference parameter).
         """
-        url = f"{self.base_url}/api/v1/openai/{assistant_id}/chat/completions"
+        url = f"{self.base_url}/api/v1/chats_openai/{assistant_id}/chat/completions"
         client = httpx.AsyncClient(timeout=None)
 
         # Build request payload based on configured API version

@@ -157,7 +157,7 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
         logger.warning("Attempting non-streaming fallback for conversation %s...", conv_id)
         try:
             import httpx as _httpx
-            url = f"{RAGFLOW_BASE_URL}/api/v1/openai/{conv['assistant_id']}/chat/completions"
+            url = f"{RAGFLOW_BASE_URL}/api/v1/chats_openai/{conv['assistant_id']}/chat/completions"
             fallback_payload = {
                 "model": "model",
                 "messages": messages,
@@ -319,7 +319,7 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                 logger.warning("Attempting non-streaming fallback for conversation %s...", conv_id)
                 try:
                     import httpx as _httpx
-                    url = f"{RAGFLOW_BASE_URL}/api/v1/openai/{conv['assistant_id']}/chat/completions"
+                    url = f"{RAGFLOW_BASE_URL}/api/v1/chats_openai/{conv['assistant_id']}/chat/completions"
                     fallback_payload = {
                         "model": "model",
                         "messages": messages,
