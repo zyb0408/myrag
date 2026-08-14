@@ -253,11 +253,16 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
             async for chunk in resp.aiter_bytes():
                 raw_chunks += 1
                 if raw_chunks <= 3:
-                    logger.info("SSE chunk #%d: %d bytes, preview=%s", raw_chunks, len(chunk), chunk.decode("utf-8", errors="replace")[:200])
+                    decoded = chunk.decode("utf-8", errors="replace")
+                    has_newline = "\n" in decoded
+                    has_cr = "\r" in decoded
+                    logger.info("SSE chunk #%d: %d bytes, has_newline=%s, has_cr=%s, preview=%s",
+                                raw_chunks, len(chunk), has_newline, has_cr, decoded[:200])
                 if cancel_event.is_set():
                     logger.info("Stream cancelled for conversation %s", conv_id)
                     break
-                buffer += chunk.decode("utf-8", errors="replace")
+                # Normalize line endings: SSE spec allows \r\n, \r, and \n as line separators
+                buffer += chunk.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
                 lines = buffer.split("\n")
                 buffer = lines.pop()
 
@@ -280,9 +285,11 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                             delta = choice.get("delta") or {}
 
                             # Log first parsed chunk structure for debugging
-                            if chunk_count == 0 and isinstance(choice, dict):
-                                logger.info("First parsed chunk keys: %s, delta keys: %s", list(choice.keys()), list(delta.keys()) if isinstance(delta, dict) else "non-dict")
-                                logger.info("First chunk delta: %s", json.dumps(delta, ensure_ascii=False)[:500])
+                            if chunk_count == 0:
+                                logger.info("First parsed chunk: choice type=%s, delta keys=%s, delta=%s",
+                                            type(choice).__name__,
+                                            list(delta.keys()) if isinstance(delta, dict) else "non-dict",
+                                            json.dumps(delta, ensure_ascii=False)[:300])
 
                             # 1) 增量文本（流式 token）
                             text = delta.get("content") or ""
@@ -291,7 +298,6 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                             if text:
                                 full_content += text
                             elif reasoning:
-                                # 如果只有思考内容，也收集（某些版本 RAGFlow 只返回 reasoning）
                                 full_content += reasoning
 
                             # 2) RAGFlow 新字段：final_content（最终完整答案）
