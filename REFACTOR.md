@@ -153,7 +153,7 @@ SSE 转发格式（与前端 `services/sse.ts` 解析完全一致）：
 | 知识库列表 | `GET /api/v1/datasets` | `page=1&page_size=100` | `{code, data:[dataset]}` |
 | 助手列表 | `GET /api/v1/chats` | — | `{code, data:[chat]}` |
 | 助手详情 | `GET /api/v1/chats/{id}` | — | `{code, data:chat}` |
-| 流式对话 | `POST /api/v1/openai/{chat_id}/chat/completions` | `{model:"model", messages, stream:true}` | OpenAI 兼容 SSE 流 |
+| 流式对话 | `POST /api/v1/chats_openai/{chat_id}/chat/completions` | `{model:"model", messages, stream:true}` | OpenAI 兼容 SSE 流 |
 
 统一请求头：`Authorization: Bearer <RAGFLOW_API_KEY>`、`Content-Type: application/json`。
 
@@ -205,7 +205,7 @@ SSE 转发格式（与前端 `services/sse.ts` 解析完全一致）：
 1. 单元级：启动 Python 后端，逐项请求 4.1~4.6 全部端点（正常路径 + 错误路径），
    断言 HTTP 状态码、`code`、`data` 结构与旧实现一致；
 2. 对接级：因本机 RAGFlow 服务未运行，启动临时 Mock 服务（Python，模拟
-   `/api/v1/datasets`、`/api/v1/chats`、`/api/v1/openai/{id}/chat/completions` SSE），
+   `/api/v1/datasets`、`/api/v1/chats`、`/api/v1/chats_openai/{id}/chat/completions` SSE），
    验证 BFF 的 RAGFlow 对接与 SSE 透传行为；
 3. 前端契约级：比对 `client/src/services/api.ts`、`services/sse.ts` 的解析方式，
    确认新响应与之逐字段匹配；

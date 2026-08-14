@@ -36,7 +36,7 @@ BFF 后端 (Python 3.10 FastAPI, :3001)
    └─ httpx → RAGFlow (http://localhost:9380)
         /api/v1/datasets
         /api/v1/chats
-        /api/v1/openai/{chat_id}/chat/completions (SSE)
+        /api/v1/chats_openai/{chat_id}/chat/completions (SSE)
 ```
 
 ---

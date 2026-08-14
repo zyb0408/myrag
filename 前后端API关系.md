@@ -91,7 +91,7 @@ Content-Type: application/json
 | GET | `/api/v1/datasets?page=1&page_size=100` | `getKnowledgeBases()` | `GET /api/knowledge-bases` | 知识库列表（分页取前 100） |
 | GET | `/api/v1/chats` | `getChatAssistants()` | `GET /api/chat-assistants` | 聊天助手列表 |
 | GET | `/api/v1/chats/:id` | `getChatAssistant(id)` | **当前无路由调用，保留方法** | 单个助手详情 |
-| POST | `/api/v1/openai/:assistantId/chat/completions` | `chatCompletion(assistantId, messages, stream)` | `POST /api/chat/:convId` | OpenAI 兼容的流式对话补全（`model: "model"`，`stream: true`），响应体以 SSE 流式返回 |
+| POST | `/api/v1/chats_openai/:assistantId/chat/completions` | `chatCompletion(assistantId, messages, stream)` | `POST /api/chat/:convId` | OpenAI 兼容的流式对话补全（`model: "model"`，`stream: true`），响应体以 SSE 流式返回 |
 
 > 说明：
 > - `chatCompletion` 直接返回 RAGFlow 的原始 `fetch Response`，由 `routes/chat.ts` 读取流并逐块转发给前端。
@@ -123,7 +123,7 @@ Content-Type: application/json
                │  Authorization: Bearer <apiKey>
 ┌──────────────▼───────────────────────────────────────────────────────┐
 │                    RAGFlow（http://localhost:9380）                   │
-│  /api/v1/datasets  /api/v1/chats  /api/v1/openai/:id/chat/completions│
+│  /api/v1/datasets  /api/v1/chats  /api/v1/chats_openai/:id/chat/completions│
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

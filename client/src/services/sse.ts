@@ -55,9 +55,11 @@ export function streamChat(
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
+          // SSE spec: field is "data:", value may optionally start with a space
+          // RAGFlow sends "data:{...}" without space; OpenAI sends "data: {...}" with space
+          if (!line.startsWith('data:')) continue;
 
-          const data = line.slice(6).trim();
+          const data = line.slice(5).trim(); // strip "data:" prefix and optional space
 
           if (data === '[DONE]') {
             onChunk({ content: '', done: true });
@@ -86,11 +88,20 @@ export function streamChat(
               onChunk({ content: '', done: false, finalContent: parsed.final_content });
               continue;
             }
-            const choice = parsed.choices?.[0];
+            const choices = parsed.choices;
+            let choice = choices?.[0];
+            // Handle both 1D [{...}] and 2D [[{...}]] choices arrays
+            if (Array.isArray(choice)) {
+              choice = choice[0];
+            }
             const delta = choice?.delta ?? {};
             const text = delta?.content;
+            const reasoning = delta?.reasoning_content;
             if (text != null && text !== '') {
               onChunk({ content: text, done: false });
+            } else if (reasoning != null && reasoning !== '') {
+              // RAGFlow reasoning/thinking content
+              onChunk({ content: reasoning, done: false });
             }
             // RAGFlow 新版本可能把 final_content 放在 delta 中，
             // 这里兜底提取，保证即使没有 BFF 包装事件也能展示完整答案。
