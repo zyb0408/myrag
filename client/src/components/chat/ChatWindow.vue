@@ -34,6 +34,7 @@ function handleSend(content: string) {
   sending.value = true;
   chatStore.setIsStreaming(true);
   chatStore.setStreamReferences([]);
+  chatStore.setStreamingContent('');
 
   // Optimistic user message
   const userMsg = {
@@ -46,9 +47,13 @@ function handleSend(content: string) {
   };
   chatStore.addMessage(userMsg);
 
-  const controller = streamChat(chatStore.currentConversationId, content, (chunk) => {
+  const convId = chatStore.currentConversationId;
+
+  const controller = streamChat(convId, content, (chunk) => {
     if (chunk.error) {
       chatStore.appendStreamContent(`\n\n[错误: ${chunk.error}]`);
+      // Persist the errored assistant message before stopping
+      finalizeAssistantMessage(convId);
       chatStore.setIsStreaming(false);
       sending.value = false;
       return;
@@ -59,7 +64,15 @@ function handleSend(content: string) {
       return;
     }
 
+    // RAGFlow 新版本：final_content 为完整答案
+    if (chunk.finalContent && chunk.finalContent.length > 0) {
+      // final_content 是权威的完整答案，无条件覆盖当前 streamingContent
+      chatStore.setStreamingContent(chunk.finalContent);
+      return;
+    }
+
     if (chunk.done) {
+      finalizeAssistantMessage(convId);
       chatStore.setIsStreaming(false);
       sending.value = false;
       return;
@@ -71,10 +84,32 @@ function handleSend(content: string) {
   abortRef.value = controller;
 }
 
+// 将 streamingContent 持久化为正式的 assistant 消息
+function finalizeAssistantMessage(convId: string) {
+  const content = chatStore.streamingContent.trim();
+  if (!content) return;
+
+  const assistantMsg = {
+    id: `assistant-${Date.now()}`,
+    conversation_id: convId,
+    role: 'assistant' as const,
+    content,
+    references: chatStore.streamingReferences.length
+      ? JSON.stringify(chatStore.streamingReferences)
+      : null,
+    created_at: new Date().toISOString(),
+  };
+  chatStore.addMessage(assistantMsg);
+  chatStore.resetStreaming();
+}
+
 // 停止生成：中断前端 fetch + 通知后端取消 RAGFlow 流
 function handleStop() {
   abortRef.value?.abort();
   abortRef.value = null;
+  if (chatStore.currentConversationId) {
+    finalizeAssistantMessage(chatStore.currentConversationId);
+  }
   chatStore.setIsStreaming(false);
   sending.value = false;
   if (chatStore.currentConversationId) {
