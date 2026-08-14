@@ -30,8 +30,8 @@ watch(
 function handleSend() {
   const trimmed = value.value.trim();
   if (!trimmed || props.disabled) return;
-  props.onSend(trimmed);
   value.value = '';
+  props.onSend(trimmed);
 }
 
 // 对应原 handleKeyDown：Enter 发送，Shift+Enter 换行
