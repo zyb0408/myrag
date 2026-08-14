@@ -71,12 +71,16 @@ async def _stream_from_non_streaming(body: dict, conv_id: str):
         references: list = []
 
         if choices:
-            message = choices[0].get("message", {})
-            full_content = message.get("content", "") or ""
+            choice = choices[0]
+            if isinstance(choice, list) and choice:
+                choice = choice[0]
+            if isinstance(choice, dict):
+                message = choice.get("message", {})
+                full_content = message.get("content", "") or ""
 
-            ref_data = body.get("reference") or choices[0].get("reference") or []
-            if isinstance(ref_data, list):
-                references = _simplify_references(ref_data)
+                ref_data = body.get("reference") or choice.get("reference") or []
+                if isinstance(ref_data, list):
+                    references = _simplify_references(ref_data)
 
         # Yield the content as a single SSE event
         if full_content:
@@ -177,16 +181,20 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                     fb_body = fb_resp.json()
                     logger.info("Non-streaming body: %s", json.dumps(fb_body, ensure_ascii=False)[:1000])
 
-                    # Extract content and references
+                    # Extract content and references (handle both 1D and 2D choices)
                     fb_choices = fb_body.get("choices", [])
                     fb_content = ""
                     fb_refs: list = []
                     if fb_choices:
-                        fb_msg = fb_choices[0].get("message", {})
-                        fb_content = fb_msg.get("content", "") or ""
-                        ref_raw = fb_body.get("reference") or fb_choices[0].get("reference") or []
-                        if isinstance(ref_raw, list):
-                            fb_refs = _simplify_references(ref_raw)
+                        fb_choice = fb_choices[0]
+                        if isinstance(fb_choice, list) and fb_choice:
+                            fb_choice = fb_choice[0]
+                        if isinstance(fb_choice, dict):
+                            fb_msg = fb_choice.get("message", {})
+                            fb_content = fb_msg.get("content", "") or ""
+                            ref_raw = fb_body.get("reference") or fb_choice.get("reference") or []
+                            if isinstance(ref_raw, list):
+                                fb_refs = _simplify_references(ref_raw)
 
                     # Save assistant message
                     if fb_content:
@@ -261,23 +269,36 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
 
                         try:
                             parsed = json.loads(data)
-                            choice = (parsed.get("choices") or [{}])[0]
+                            choices = parsed.get("choices") or []
+                            # Handle both 1D [{...}] and 2D [[{...}]] choices arrays
+                            if choices and isinstance(choices[0], list):
+                                choice = choices[0][0] if choices[0] else {}
+                            elif choices and isinstance(choices[0], dict):
+                                choice = choices[0]
+                            else:
+                                choice = {}
                             delta = choice.get("delta") or {}
+
+                            # Log first parsed chunk structure for debugging
+                            if chunk_count == 0 and isinstance(choice, dict):
+                                logger.info("First parsed chunk keys: %s, delta keys: %s", list(choice.keys()), list(delta.keys()) if isinstance(delta, dict) else "non-dict")
+                                logger.info("First chunk delta: %s", json.dumps(delta, ensure_ascii=False)[:500])
 
                             # 1) 增量文本（流式 token）
                             text = delta.get("content") or ""
+                            # RAGFlow 思考过程在 reasoning_content 字段
+                            reasoning = delta.get("reasoning_content") or ""
                             if text:
                                 full_content += text
+                            elif reasoning:
+                                # 如果只有思考内容，也收集（某些版本 RAGFlow 只返回 reasoning）
+                                full_content += reasoning
 
                             # 2) RAGFlow 新字段：final_content（最终完整答案）
-                            #    当 RAGFlow 通过 `extra_body.reference=true` 请求时，
-                            #    最终分块中的 `final_content` 才是完整答复；
-                            #    增量 `delta.content` 可能为空。
                             final_content = parsed.get("final_content") or delta.get("final_content")
                             if final_content and isinstance(final_content, str) and not final_content_seen:
                                 final_content_seen = True
                                 logger.info("RAGFlow final_content received (%d chars)", len(final_content))
-                                # 以 final_content 作为最终答案；若之前已累积部分增量则合并
                                 if final_content.strip():
                                     full_content = final_content
 
@@ -287,9 +308,9 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                                 ref_raw = parsed.get("reference")
                             if isinstance(ref_raw, list) and ref_raw:
                                 references = _simplify_references(ref_raw)
-                        except Exception:
-                            # Skip unparseable chunks
-                            logger.debug("Skipping unparseable SSE data: %s", data[:100])
+                        except Exception as e:
+                            # Log parsing failures for debugging
+                            logger.warning("Failed to parse SSE data: %s, error: %s", data[:150], str(e))
                             pass
 
                         chunk_count += 1
