@@ -41,25 +41,42 @@ async def _parse_body(request: Request) -> dict:
         return {}
 
 
-def _simplify_references(refs: list) -> list:
+def _simplify_references(refs) -> list:
     """Extract display-relevant fields from RAGFlow citation chunks.
 
-    RAGFlow returns rich citation objects; we keep only what the UI needs and
-    tolerate field-name variants across versions (document_name vs docnm_kwd,
-    document_id vs doc_id, ...).
+    Supports both RAGFlow v0.24+ (object with 'chunks' key) and legacy (array) formats.
     """
     simplified = []
-    for r in refs:
-        if not isinstance(r, dict):
-            continue
-        simplified.append(
-            {
-                "document_name": r.get("document_name") or r.get("docnm_kwd") or "",
-                "content": r.get("content") or r.get("content_with_weight") or "",
-                "document_id": r.get("document_id") or r.get("doc_id") or "",
-                "dataset_id": r.get("dataset_id") or r.get("kb_id") or "",
-            }
-        )
+
+    if isinstance(refs, dict):
+        chunks = refs.get("chunks", {})
+        if isinstance(chunks, dict):
+            for chunk_id, chunk in chunks.items():
+                if not isinstance(chunk, dict):
+                    continue
+                simplified.append(
+                    {
+                        "document_name": chunk.get("document_name") or "",
+                        "content": chunk.get("content") or "",
+                        "document_id": chunk.get("document_id") or "",
+                        "dataset_id": chunk.get("dataset_id") or "",
+                    }
+                )
+        return simplified
+
+    if isinstance(refs, list):
+        for r in refs:
+            if not isinstance(r, dict):
+                continue
+            simplified.append(
+                {
+                    "document_name": r.get("document_name") or r.get("docnm_kwd") or "",
+                    "content": r.get("content") or r.get("content_with_weight") or "",
+                    "document_id": r.get("document_id") or r.get("doc_id") or "",
+                    "dataset_id": r.get("dataset_id") or r.get("kb_id") or "",
+                }
+            )
+
     return simplified
 
 
@@ -79,7 +96,7 @@ async def _stream_from_non_streaming(body: dict, conv_id: str):
                 full_content = message.get("content", "") or ""
 
                 ref_data = body.get("reference") or choice.get("reference") or []
-                if isinstance(ref_data, list):
+                if ref_data:
                     references = _simplify_references(ref_data)
 
         # Yield the content as a single SSE event
@@ -193,7 +210,7 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                             fb_msg = fb_choice.get("message", {})
                             fb_content = fb_msg.get("content", "") or ""
                             ref_raw = fb_body.get("reference") or fb_choice.get("reference") or []
-                            if isinstance(ref_raw, list):
+                            if ref_raw:
                                 fb_refs = _simplify_references(ref_raw)
 
                     # Save assistant message
@@ -316,11 +333,9 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                                 if final_content.strip():
                                     full_content = final_content
 
-                            # 3) 引用：可能位于 delta.reference 或顶层 reference 字段
-                            ref_raw = delta.get("reference")
-                            if not isinstance(ref_raw, list) or not ref_raw:
-                                ref_raw = parsed.get("reference")
-                            if isinstance(ref_raw, list) and ref_raw:
+                            # 3) 引用：可能位于 delta.reference 或顶层 reference 字段（v0.24+ 为对象，旧版为数组）
+                            ref_raw = delta.get("reference") or parsed.get("reference")
+                            if ref_raw:
                                 references = _simplify_references(ref_raw)
                         except Exception as e:
                             # Log parsing failures for debugging
@@ -377,7 +392,7 @@ async def chat(conv_id: str, request: Request, user: CurrentUser):
                                 msg = choices[0].get("message", {})
                                 full_content = msg.get("content", "") or ""
                                 ref_data = fb_body.get("reference") or choices[0].get("reference") or []
-                                if isinstance(ref_data, list):
+                                if ref_data:
                                     references = _simplify_references(ref_data)
                                 logger.info("Non-streaming fallback recovered %d chars content, %d references", len(full_content), len(references))
                         else:

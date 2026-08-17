@@ -57,6 +57,59 @@ CHATS = [
 
 STREAM_PIECES = ["你好，", "这是来自", "RAGFlow 的", "流式测试回复。"]
 
+# RAGFlow v0.24+ format: reference is an object with 'chunks' key
+REFERENCE_CHUNK = {
+    "choices": [{
+        "delta": {
+            "content": "",
+            "reference": {
+                "chunks": {
+                    "20": {
+                        "id": "4b8935ac0a22deb1",
+                        "content": "这是引用的文档内容片段，包含产品使用手册的详细说明...",
+                        "document_id": "4bdd2ff65e1511f0907f09f583941b45",
+                        "document_name": "INSTALL22.md",
+                        "document_metadata": {"author": "bob", "year": "2023"},
+                        "dataset_id": "456ce60c5e1511f0907f09f583941b45",
+                        "similarity": 0.5697155305154673,
+                        "vector_similarity": 0.7323851005515574,
+                        "term_similarity": 0.5000000005,
+                        "positions": [[12, 11, 11, 11, 11]],
+                        "url": None,
+                        "doc_type": "",
+                    },
+                    "21": {
+                        "id": "5c9a46bd1b23ef2",
+                        "content": "这是第二篇引用文档的内容，包含常见问题解答...",
+                        "document_id": "5bce3aa7f26211f0907f09f583941b46",
+                        "document_name": "FAQ.md",
+                        "document_metadata": {"author": "alice", "year": "2024"},
+                        "dataset_id": "678de70d5e1511f0907f09f583941b46",
+                        "similarity": 0.4823451098765432,
+                        "vector_similarity": 0.6512345678901234,
+                        "term_similarity": 0.4500000001,
+                        "positions": [[5, 3, 3, 3, 3]],
+                        "url": None,
+                        "doc_type": "",
+                    },
+                },
+                "doc_aggs": {
+                    "INSTALL22.md": {
+                        "doc_name": "INSTALL22.md",
+                        "doc_id": "4bdd2ff65e1511f0907f09f583941b45",
+                        "count": 1,
+                    },
+                    "FAQ.md": {
+                        "doc_name": "FAQ.md",
+                        "doc_id": "5bce3aa7f26211f0907f09f583941b46",
+                        "count": 1,
+                    },
+                },
+            },
+        },
+    }],
+}
+
 
 class MockHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -103,6 +156,9 @@ class MockHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data:{json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
                 time.sleep(0.05)
+            # Send reference chunk in RAGFlow v0.24+ format (object)
+            self.wfile.write(f"data:{json.dumps(REFERENCE_CHUNK, ensure_ascii=False)}\n\n".encode("utf-8"))
+            self.wfile.flush()
             self.wfile.write(b"data:[DONE]\n\n")
             self.wfile.flush()
             # Terminate the response body (no Content-Length / no chunked encoding here);
